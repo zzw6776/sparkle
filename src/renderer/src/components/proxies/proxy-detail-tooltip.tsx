@@ -6,6 +6,9 @@ interface Props {
   proxy: ControllerProxiesDetail | ControllerGroupDetail
   anchorEl: HTMLElement | null
   visible: boolean
+  speedTest?: SpeedTestResult
+  speedTestProgress?: SpeedTestProgress
+  speedTestError?: string
 }
 
 const TOOLTIP_WIDTH = 228
@@ -47,7 +50,14 @@ function getDelaySvgColor(delay: number): string {
   return 'var(--color-warning)'
 }
 
-const ProxyDetailTooltip: React.FC<Props> = ({ proxy, anchorEl, visible }) => {
+const ProxyDetailTooltip: React.FC<Props> = ({
+  proxy,
+  anchorEl,
+  visible,
+  speedTest,
+  speedTestProgress,
+  speedTestError
+}) => {
   const [pos, setPos] = useState<{ top: number; left: number; side: 'left' | 'right' } | null>(null)
   const [finalTop, setFinalTop] = useState<number | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -175,6 +185,41 @@ const ProxyDetailTooltip: React.FC<Props> = ({ proxy, anchorEl, visible }) => {
           >
             {proxy.alive ? '在线' : '离线'}
           </Chip>
+
+          {(speedTestProgress || speedTest || speedTestError) && (
+            <>
+              <span className="text-[10px] text-muted">下载速度</span>
+              <Chip
+                className="justify-self-end"
+                color={speedTestError ? 'danger' : speedTest ? 'success' : 'accent'}
+                variant="soft"
+                size="sm"
+              >
+                {speedTestProgress
+                  ? `${(speedTestProgress.bytesPerSecond / 1024 / 1024).toFixed(2)} MiB/s`
+                  : speedTest
+                    ? `${(speedTest.bytesPerSecond / 1024 / 1024).toFixed(2)} MiB/s`
+                    : '失败'}
+              </Chip>
+              {speedTest && (
+                <>
+                  <span className="text-[10px] text-muted">测速来源</span>
+                  <span className="text-[10px] text-muted justify-self-end">
+                    {speedTest.source === 'cloudflare'
+                      ? 'Cloudflare'
+                      : speedTest.source === 'telegram'
+                        ? 'Telegram'
+                        : '自定义'}
+                  </span>
+                  <span className="text-[10px] text-muted">测速数据</span>
+                  <span className="text-[10px] text-muted justify-self-end">
+                    {(speedTest.downloadedBytes / 1_000_000).toFixed(1)} MB ·{' '}
+                    {(speedTest.duration / 1000).toFixed(2)} 秒
+                  </span>
+                </>
+              )}
+            </>
+          )}
 
           {proxy.udp !== undefined && (
             <>

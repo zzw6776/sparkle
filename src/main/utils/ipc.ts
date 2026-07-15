@@ -138,6 +138,7 @@ import { showNotification } from './notification'
 import { getUserAgent } from './userAgent'
 import { appendAppLog, clearCachedMihomoLogs, getCachedMihomoLogs } from './log'
 import { ageIdentityToRecipient, generateAgeKeyPair } from './age'
+import { cancelMihomoProxySpeedTest, mihomoProxySpeedTest } from '../core/speedTest'
 
 function ipcErrorWrapper<T>( // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: (...args: any[]) => T | Promise<T> // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -242,6 +243,14 @@ export function registerIpcMainHandlers(): void {
   ipcMain.handle('mihomoGroupDelay', (_e, group, url) =>
     ipcErrorWrapper(mihomoGroupDelay)(group, url)
   )
+  ipcMain.handle('mihomoProxySpeedTest', (event, proxy) =>
+    ipcErrorWrapper(mihomoProxySpeedTest)(proxy, (progress: SpeedTestProgress) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('mihomoProxySpeedTestProgress', progress)
+      }
+    })
+  )
+  ipcMain.handle('cancelMihomoProxySpeedTest', () => cancelMihomoProxySpeedTest())
   ipcMain.handle('mihomoRulesDisable', (_e, rules) => ipcErrorWrapper(mihomoRulesDisable)(rules))
   ipcMain.handle('patchMihomoConfig', (_e, patch) => ipcErrorWrapper(patchMihomoConfig)(patch))
   ipcMain.handle('restartMihomoLogs', ipcErrorWrapper(restartMihomoLogs))

@@ -1,6 +1,6 @@
 import { Button, Card, CardBody } from '@heroui/react'
 import { mihomoUnfixedProxy } from '@renderer/utils/ipc'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { FaMapPin } from 'react-icons/fa6'
 import ProxyDetailTooltip from './proxy-detail-tooltip'
 
@@ -9,7 +9,8 @@ interface Props {
   onProxyDelay: (
     proxy: ControllerProxiesDetail | ControllerGroupDetail,
     group?: ControllerMixedGroup
-  ) => Promise<ControllerProxiesDelay>
+  ) => Promise<void>
+  onProxySpeedTest: (proxy: ControllerProxiesDetail | ControllerGroupDetail) => Promise<void>
   proxyDisplayLayout: 'hidden' | 'single' | 'double'
   showGroupSelectedProxy: boolean
   showProxyDetailTooltip: boolean
@@ -17,6 +18,12 @@ interface Props {
   group: ControllerMixedGroup
   onSelect: (group: string, proxy: string) => void
   selected: boolean
+  delay: number
+  delayTesting: boolean
+  speedTest?: SpeedTestResult
+  speedTestProgress?: SpeedTestProgress
+  speedTestError?: string
+  speedTesting: boolean
 }
 
 const isGroup = (
@@ -35,19 +42,18 @@ const ProxyItem: React.FC<Props> = (props) => {
     proxy,
     selected,
     onSelect,
-    onProxyDelay
+    onProxyDelay,
+    onProxySpeedTest,
+    speedTest,
+    speedTestProgress,
+    speedTestError,
+    speedTesting,
+    delay,
+    delayTesting
   } = props
   const shouldShowGroupSelectedProxy =
     showGroupSelectedProxy && isGroup(proxy) && Boolean(proxy.now)
 
-  const delay = useMemo(() => {
-    if (proxy.history.length > 0) {
-      return proxy.history[proxy.history.length - 1].delay
-    }
-    return -1
-  }, [proxy])
-
-  const [loading, setLoading] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -151,12 +157,32 @@ const ProxyItem: React.FC<Props> = (props) => {
     return delay.toString()
   }
 
+  function formatSpeed(bytesPerSecond: number): string {
+    if (bytesPerSecond >= 1024 * 1024) {
+      const digits = bytesPerSecond >= 100 * 1024 * 1024 ? 0 : 1
+      return `↓${(bytesPerSecond / 1024 / 1024).toFixed(digits)}M`
+    }
+    return `↓${Math.max(0, bytesPerSecond / 1024).toFixed(0)}K`
+  }
+
+  const speedText = speedTesting
+    ? speedTestProgress
+      ? formatSpeed(speedTestProgress.bytesPerSecond)
+      : '停止'
+    : speedTest
+      ? formatSpeed(speedTest.bytesPerSecond)
+      : speedTestError
+        ? '测速失败'
+        : '下载测速'
+
+  const speedTitle = speedTesting
+    ? '停止下载测速'
+    : speedTest
+    ? `${(speedTest.bytesPerSecond / 1024 / 1024).toFixed(2)} MiB/s · ${(speedTest.bitsPerSecond / 1_000_000).toFixed(1)} Mbps`
+    : speedTestError || '真实下载测速'
+
   const onDelay = (): void => {
-    setLoading(true)
-    onProxyDelay(proxy, group).finally(() => {
-      mutateProxies()
-      setLoading(false)
-    })
+    void onProxyDelay(proxy, group)
   }
 
   const fixed = group.fixed && group.fixed === proxy.name
@@ -225,13 +251,30 @@ const ProxyItem: React.FC<Props> = (props) => {
                   )}
                   <Button
                     isIconOnly
-                    isLoading={loading}
+                    isLoading={delayTesting}
                     color={delayColor(delay)}
                     onPress={onDelay}
                     variant="light"
                     className="h-8 w-8 min-w-8 p-0 text-xs"
                   >
                     {delayText(delay)}
+                  </Button>
+                  <Button
+                    color={
+                      speedTesting
+                        ? 'danger'
+                        : speedTestError
+                          ? 'danger'
+                          : speedTest
+                            ? 'success'
+                            : 'primary'
+                    }
+                    onPress={() => void onProxySpeedTest(proxy)}
+                    variant="light"
+                    title={speedTitle}
+                    className="h-8 min-w-14 px-1 text-[10px]"
+                  >
+                    {speedText}
                   </Button>
                 </div>
               </>
@@ -270,13 +313,30 @@ const ProxyItem: React.FC<Props> = (props) => {
                   <div className="flex items-center">
                     <Button
                       isIconOnly
-                      isLoading={loading}
+                      isLoading={delayTesting}
                       color={delayColor(delay)}
                       onPress={onDelay}
                       variant="light"
                       className="h-full w-8 min-w-8 p-0 text-sm"
                     >
                       {delayText(delay)}
+                    </Button>
+                    <Button
+                      color={
+                        speedTesting
+                          ? 'danger'
+                          : speedTestError
+                            ? 'danger'
+                            : speedTest
+                              ? 'success'
+                              : 'primary'
+                      }
+                      onPress={() => void onProxySpeedTest(proxy)}
+                      variant="light"
+                      title={speedTitle}
+                      className="h-full min-w-14 px-1 text-[10px]"
+                    >
+                      {speedText}
                     </Button>
                   </div>
                 </div>
@@ -288,6 +348,9 @@ const ProxyItem: React.FC<Props> = (props) => {
       {showProxyDetailTooltip && (
         <ProxyDetailTooltip
           proxy={proxy}
+          speedTest={speedTest}
+          speedTestProgress={speedTestProgress}
+          speedTestError={speedTestError}
           anchorEl={showTooltip ? wrapperRef.current : null}
           visible={showTooltip}
         />

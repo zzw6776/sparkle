@@ -21,16 +21,24 @@ import { deepMerge } from '../utils/merge'
 import vm from 'vm'
 import { existsSync, writeFileSync } from 'fs'
 import path from 'path'
+import { is } from '@electron-toolkit/utils'
+import { createServer } from 'node:net'
 
 let runtimeConfigStr: string,
   rawProfileStr: string,
   currentProfileStr: string,
   overrideProfileStr: string,
   runtimeConfig: MihomoConfig
+let runtimeSpeedTestPort = 17891
 
 export async function generateProfile(): Promise<void> {
   const { current } = await getProfileConfig()
-  const { diffWorkDir = false, controlDns = true, controlSniff = true } = await getAppConfig()
+  const {
+    diffWorkDir = false,
+    controlDns = true,
+    controlSniff = true,
+    speedTestPort = 17891
+  } = await getAppConfig()
   const currentProfileConfig = await getProfile(current)
   rawProfileStr = await getProfileStr(current)
   currentProfileStr = stringifyYaml(currentProfileConfig)
@@ -49,6 +57,8 @@ export async function generateProfile(): Promise<void> {
 
   const profile = deepMerge(JSON.parse(JSON.stringify(currentProfile)), configToMerge)
 
+  configureDevelopmentIsolation(profile)
+  await configureSpeedTest(profile, speedTestPort)
   await cleanProfile(profile, controlDns, controlSniff)
 
   runtimeConfig = profile
@@ -60,6 +70,84 @@ export async function generateProfile(): Promise<void> {
     diffWorkDir ? mihomoWorkConfigPath(current) : mihomoWorkConfigPath('work'),
     runtimeConfigStr
   )
+}
+
+export const SPEED_TEST_GROUP = '__SPARKLE_SPEEDTEST__'
+const SPEED_TEST_LISTENER = 'sparkle-speedtest'
+
+function configureDevelopmentIsolation(profile: MihomoConfig): void {
+  if (!is.dev || !profile.dns) return
+
+  // A subscription may expose a fixed local DNS port. The installed app can
+  // already own that port, while the development core only needs internal DNS.
+  delete profile.dns.listen
+}
+
+function isLoopbackPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer()
+    server.unref()
+    server.once('error', () => resolve(false))
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      server.close((error) => resolve(!error))
+    })
+  })
+}
+
+async function configureSpeedTest(
+  profile: MihomoConfig,
+  configuredPort: number
+): Promise<void> {
+  const preferredPort =
+    Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535
+      ? configuredPort
+      : 17891
+
+  const occupiedPorts = new Set<number>()
+  ;['mixed-port', 'socks-port', 'port', 'redir-port', 'tproxy-port'].forEach((key) => {
+    const value = profile[key]
+    if (typeof value === 'number' && value > 0) occupiedPorts.add(value)
+  })
+  profile.listeners?.forEach((listener) => {
+    if (listener.name === SPEED_TEST_LISTENER) return
+    const value = listener.port
+    if (typeof value === 'number' && value > 0) occupiedPorts.add(value)
+  })
+
+  let port = preferredPort
+  while (
+    port <= 65535 &&
+    (occupiedPorts.has(port) || !(await isLoopbackPortAvailable(port)))
+  ) {
+    port++
+  }
+  if (port > 65535) throw new Error('没有可用的下载测速端口')
+  runtimeSpeedTestPort = port
+
+  const groups = Array.isArray(profile['proxy-groups']) ? profile['proxy-groups'] : []
+  profile['proxy-groups'] = groups.filter((group) => group.name !== SPEED_TEST_GROUP)
+  const selectableGroups = profile['proxy-groups'].map((group) => group.name)
+  profile['proxy-groups'].push({
+    name: SPEED_TEST_GROUP,
+    type: 'select',
+    proxies: [...new Set(['DIRECT', ...selectableGroups])],
+    'include-all': true,
+    hidden: true
+  })
+
+  const listeners = Array.isArray(profile.listeners) ? profile.listeners : []
+  profile.listeners = listeners.filter((listener) => listener.name !== SPEED_TEST_LISTENER)
+  profile.listeners.push({
+    name: SPEED_TEST_LISTENER,
+    type: 'mixed',
+    listen: '127.0.0.1',
+    port,
+    proxy: SPEED_TEST_GROUP
+  })
+}
+
+export function getRuntimeSpeedTestPort(): number {
+  return runtimeSpeedTestPort
 }
 
 async function cleanProfile(
@@ -131,7 +219,12 @@ function cleanStringConfigs(profile: MihomoConfig): void {
 
   if (profile.mode === 'rule') delete partialProfile.mode
 
-  const emptyStringConfigs = ['interface-name', 'secret', 'global-client-fingerprint']
+  // Mihomo no longer accepts this global option. It can still be supplied by an
+  // older subscription or override after the controlled-config migration runs,
+  // so remove it from the final runtime profile as well.
+  delete partialProfile['global-client-fingerprint']
+
+  const emptyStringConfigs = ['interface-name', 'secret']
   emptyStringConfigs.forEach((key) => {
     if (profile[key] === '') delete partialProfile[key]
   })

@@ -74,7 +74,7 @@ export function themesDir(): string {
 
 export function mihomoIpcPath(): string {
   if (process.platform === 'win32') {
-    return '\\\\.\\pipe\\Sparkle\\mihomo'
+    return is.dev ? '\\\\.\\pipe\\Sparkle\\mihomo-dev' : '\\\\.\\pipe\\Sparkle\\mihomo'
   }
   const { core = 'mihomo' } = getAppConfigSync()
   if (core === 'system') {

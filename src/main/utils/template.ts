@@ -1,4 +1,5 @@
 import os from 'os'
+import { is } from '@electron-toolkit/utils'
 
 export const defaultConfig: AppConfig = {
   core: 'mihomo',
@@ -64,6 +65,11 @@ export const defaultConfig: AppConfig = {
   delayTestConcurrency: 50,
   delayTestUseGroupApi: false,
   delayTestUrlScope: 'group',
+  speedTestSource: 'cloudflare',
+  speedTestPort: is.dev ? 27891 : 17891,
+  speedTestDuration: 8000,
+  speedTestMaxBytes: 100_000_000,
+  speedTestWarmupBytes: 1_000_000,
   showProxyDetailTooltip: false
 }
 
@@ -78,7 +84,7 @@ export const defaultControledMihomoConfig: Partial<MihomoConfig> = {
   secret: '',
   ipv6: true,
   mode: 'rule',
-  'mixed-port': 7890,
+  'mixed-port': is.dev ? 17890 : 7890,
   'socks-port': 0,
   port: 0,
   'redir-port': 0,

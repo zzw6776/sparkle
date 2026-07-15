@@ -32,7 +32,8 @@ interface MihomoConfig {
   authentication: string[]
   port?: number
   proxies?: []
-  'proxy-groups'?: []
+  'proxy-groups'?: MihomoProxyGroupConfig[]
+  listeners?: Record<string, unknown>[]
   rules?: []
   hosts?: { [key: string]: string | string[] }
   'geodata-mode'?: boolean
@@ -50,6 +51,12 @@ interface MihomoConfig {
   profile: MihomoProfileConfig
   'rule-providers'?: Record<string, unknown>
   'proxy-providers'?: Record<string, unknown>
+}
+
+interface MihomoProxyGroupConfig extends Record<string, unknown> {
+  name: string
+  url?: string
+  use?: string[]
 }
 
 interface MihomoTunConfig {

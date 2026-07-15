@@ -5,39 +5,69 @@ import { useAppConfig } from '@renderer/hooks/use-app-config'
 import {
   getImageDataURL,
   mihomoChangeProxy,
-  mihomoCloseConnections,
-  mihomoGroupDelay,
-  mihomoProxyDelay
+  mihomoCloseConnections
 } from '@renderer/utils/ipc'
 import { FaLocationCrosshairs } from 'react-icons/fa6'
-import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react'
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  useSyncExternalStore,
+  type ReactNode
+} from 'react'
 import { GroupedVirtuoso, GroupedVirtuosoHandle } from 'react-virtuoso'
 import ProxyItem from '@renderer/components/proxies/proxy-item'
 import ProxySettingDrawer from '@renderer/components/proxies/proxy-setting-drawer'
 import { IoIosArrowBack } from 'react-icons/io'
-import { MdDoubleArrow, MdOutlineSpeed, MdTune } from 'react-icons/md'
+import { MdDoubleArrow, MdDownload, MdOutlineSpeed, MdStop, MdTune } from 'react-icons/md'
 import { useGroups } from '@renderer/hooks/use-groups'
 import CollapseInput from '@renderer/components/base/collapse-input'
 import { includesIgnoreCase } from '@renderer/utils/includes'
 import { useControledMihomoConfig } from '@renderer/hooks/use-controled-mihomo-config'
-import { runDelayTestsWithConcurrency } from '@renderer/utils/delay-test'
+import {
+  getSpeedTestSnapshot,
+  subscribeSpeedTestStore,
+  toggleGroupSpeedTest,
+  toggleProxySpeedTest
+} from '@renderer/utils/speed-test-store'
+import {
+  getDelayTestSnapshot,
+  getDisplayedDelay,
+  releaseDelayTestResults,
+  runGroupDelayTest,
+  runProxyDelayTest,
+  subscribeDelayTestStore
+} from '@renderer/utils/delay-test-store'
 
 type ProxyLike = ControllerProxiesDetail | ControllerGroupDetail
 
 const EMPTY_PROXIES: ProxyLike[] = []
 
-function getProxyDelay(proxy: ProxyLike): number {
-  return proxy.history.length > 0 ? proxy.history[proxy.history.length - 1].delay : -1
-}
-
-function compareProxyDelay(a: ProxyLike, b: ProxyLike): number {
-  const delayA = getProxyDelay(a)
-  const delayB = getProxyDelay(b)
+function compareProxyDelay(
+  a: ProxyLike,
+  b: ProxyLike,
+  delayTestState: ReturnType<typeof getDelayTestSnapshot>
+): number {
+  const delayA = getDisplayedDelay(a, delayTestState)
+  const delayB = getDisplayedDelay(b, delayTestState)
   if (delayA === -1) return -1
   if (delayB === -1) return 1
   if (delayA === 0) return 1
   if (delayB === 0) return -1
   return delayA - delayB
+}
+
+function compareProxySpeed(
+  a: ProxyLike,
+  b: ProxyLike,
+  speedTests: Record<string, SpeedTestResult>
+): number {
+  const speedA = speedTests[a.name]?.bytesPerSecond ?? -1
+  const speedB = speedTests[b.name]?.bytesPerSecond ?? -1
+  return speedB - speedA
 }
 
 function getProviderName(proxy: ProxyLike): string | undefined {
@@ -52,10 +82,12 @@ interface GroupHeaderProps {
   groupDisplayLayout: 'hidden' | 'single' | 'double'
   searchValue: string
   delaying: boolean
+  speedTesting: boolean
   onToggle: (index: number, currentlyOpen: boolean) => void
   onUpdateSearch: (index: number, value: string) => void
   onScrollToProxy: (index: number) => void
   onGroupDelay: (index: number) => void
+  onGroupSpeedTest: (index: number) => void
 }
 
 const GroupHeader = memo(function GroupHeader({
@@ -66,10 +98,12 @@ const GroupHeader = memo(function GroupHeader({
   groupDisplayLayout,
   searchValue,
   delaying,
+  speedTesting,
   onToggle,
   onUpdateSearch,
   onScrollToProxy,
-  onGroupDelay
+  onGroupDelay,
+  onGroupSpeedTest
 }: GroupHeaderProps) {
   return (
     <div className={`w-full pt-2 ${isLast && !isOpen ? 'pb-2' : ''} px-2`}>
@@ -146,6 +180,20 @@ const GroupHeader = memo(function GroupHeader({
                 >
                   <MdOutlineSpeed className="text-lg text-foreground-500" />
                 </Button>
+                <Button
+                  variant="light"
+                  color={speedTesting ? 'danger' : 'default'}
+                  size="sm"
+                  isIconOnly
+                  title={speedTesting ? '停止下载测速' : '真实下载测速'}
+                  onPress={() => onGroupSpeedTest(index)}
+                >
+                  {speedTesting ? (
+                    <MdStop className="text-lg" />
+                  ) : (
+                    <MdDownload className="text-lg text-foreground-500" />
+                  )}
+                </Button>
               </div>
               <IoIosArrowBack
                 className={`transition duration-200 ml-2 h-8 text-lg text-foreground-500 flex items-center ${
@@ -205,7 +253,22 @@ const Proxies: React.FC = () => {
   const [isOpenContent, setIsOpenContent] = useState<boolean[]>(isOpen)
   const isOpenContentRef = useRef<boolean[]>(isOpen)
   isOpenContentRef.current = isOpenContent
-  const [delaying, setDelaying] = useState(Array(groups.length).fill(false))
+  const delayTestState = useSyncExternalStore(
+    subscribeDelayTestStore,
+    getDelayTestSnapshot,
+    getDelayTestSnapshot
+  )
+  const speedTestState = useSyncExternalStore(
+    subscribeSpeedTestStore,
+    getSpeedTestSnapshot,
+    getSpeedTestSnapshot
+  )
+  const speedTests = speedTestState.tests
+  const speedTestProgresses = speedTestState.progresses
+  const speedTestErrors = speedTestState.errors
+  const speedTesting = speedTestState.testing
+  const groupSpeedTesting = groups.map((group) => speedTestState.activeGroup === group.name)
+  const groupDelaying = groups.map((group) => delayTestState.groups.has(group.name))
   const [searchValue, setSearchValue] = useState<string[]>(() => {
     if (
       rememberProxyGroupOpenState &&
@@ -268,9 +331,6 @@ const Proxies: React.FC = () => {
       }
       return groups.map((_, index) => prev[index] ?? '')
     })
-    setDelaying((prev) =>
-      prev.length === groups.length ? prev : groups.map((_, index) => prev[index] || false)
-    )
   }, [groups])
 
   const { groupCounts, allProxies } = useMemo(() => {
@@ -284,10 +344,15 @@ const Proxies: React.FC = () => {
           : (group.all as ProxyLike[])
 
         if (proxyDisplayOrder === 'delay') {
-          groupProxies = [...groupProxies].sort(compareProxyDelay)
+          groupProxies = [...groupProxies].sort((a, b) =>
+            compareProxyDelay(a, b, delayTestState)
+          )
         }
         if (proxyDisplayOrder === 'name') {
           groupProxies = [...groupProxies].sort((a, b) => a.name.localeCompare(b.name))
+        }
+        if (proxyDisplayOrder === 'speed') {
+          groupProxies = [...groupProxies].sort((a, b) => compareProxySpeed(a, b, speedTests))
         }
 
         groupCounts.push(Math.ceil(groupProxies.length / cols))
@@ -298,7 +363,7 @@ const Proxies: React.FC = () => {
       }
     })
     return { groupCounts, allProxies }
-  }, [groups, isOpenContent, proxyDisplayOrder, cols, searchValue])
+  }, [groups, isOpenContent, proxyDisplayOrder, cols, searchValue, speedTests, delayTestState])
 
   const onChangeProxy = useCallback(
     async (group: string, proxy: string): Promise<void> => {
@@ -324,19 +389,44 @@ const Proxies: React.FC = () => {
   )
 
   const onProxyDelay = useCallback(
-    async (proxy: ProxyLike, group?: ControllerMixedGroup): Promise<ControllerProxiesDelay> => {
-      return await mihomoProxyDelay(proxy.name, getDelayTestUrl(group), getProviderName(proxy))
+    async (proxy: ProxyLike, group?: ControllerMixedGroup): Promise<void> => {
+      const run = await runProxyDelayTest(
+        proxy.name,
+        getDelayTestUrl(group),
+        getProviderName(proxy)
+      )
+      if (Object.keys(run).length === 0) return
+      try {
+        await mutate()
+      } catch {
+        // The core already has the result; a later SWR retry can refresh the history.
+      } finally {
+        releaseDelayTestResults(run)
+      }
     },
-    [getDelayTestUrl]
+    [getDelayTestUrl, mutate]
   )
 
-  const setGroupDelaying = useCallback((index: number, value: boolean): void => {
-    setDelaying((prev) => {
-      const newDelaying = [...prev]
-      newDelaying[index] = value
-      return newDelaying
-    })
-  }, [])
+  const onProxySpeedTest = useCallback(
+    async (proxy: ProxyLike): Promise<void> => {
+      await toggleProxySpeedTest(proxy.name)
+    },
+    []
+  )
+
+  const onGroupSpeedTest = useCallback(
+    async (index: number): Promise<void> => {
+      const group = groups[index]
+      if (!group) return
+
+      const proxies = allProxies[index]?.length ? allProxies[index] : group.all
+      await toggleGroupSpeedTest(
+        group.name,
+        proxies.map((proxy) => proxy.name)
+      )
+    },
+    [allProxies, groups]
+  )
 
   const onGroupDelay = useCallback(
     async (index: number): Promise<void> => {
@@ -366,26 +456,23 @@ const Proxies: React.FC = () => {
       }
 
       const testUrl = getDelayTestUrl(group)
-      setGroupDelaying(index, true)
-
+      const run = await runGroupDelayTest({
+        group: group.name,
+        proxies: proxies.map((proxy) => ({
+          name: proxy.name,
+          provider: getProviderName(proxy)
+        })),
+        url: testUrl,
+        useGroupApi: delayTestUseGroupApi,
+        concurrency: delayTestConcurrency
+      })
+      if (Object.keys(run).length === 0) return
       try {
-        if (delayTestUseGroupApi) {
-          await mihomoGroupDelay(group.name, testUrl)
-          return
-        }
-
-        await runDelayTestsWithConcurrency(proxies, delayTestConcurrency, async (proxy) => {
-          try {
-            await mihomoProxyDelay(proxy.name, testUrl, getProviderName(proxy))
-          } catch {
-            // ignore
-          }
-        })
+        await mutate()
       } catch {
-        // ignore
+        // The core already has the results; a later SWR retry can refresh the history.
       } finally {
-        mutate()
-        setGroupDelaying(index, false)
+        releaseDelayTestResults(run)
       }
     },
     [
@@ -394,8 +481,7 @@ const Proxies: React.FC = () => {
       delayTestUseGroupApi,
       delayTestConcurrency,
       mutate,
-      getDelayTestUrl,
-      setGroupDelaying
+      getDelayTestUrl
     ]
   )
 
@@ -524,6 +610,11 @@ const Proxies: React.FC = () => {
   const onGroupDelayStable = useCallback((i: number) => {
     onGroupDelayRef.current(i)
   }, [])
+  const onGroupSpeedTestRef = useRef(onGroupSpeedTest)
+  onGroupSpeedTestRef.current = onGroupSpeedTest
+  const onGroupSpeedTestStable = useCallback((i: number) => {
+    onGroupSpeedTestRef.current(i)
+  }, [])
 
   const scrollToCurrentProxyRef = useRef(scrollToCurrentProxy)
   scrollToCurrentProxyRef.current = scrollToCurrentProxy
@@ -538,8 +629,10 @@ const Proxies: React.FC = () => {
   groupDisplayLayoutRef.current = groupDisplayLayout
   const searchValueRef = useRef(searchValue)
   searchValueRef.current = searchValue
-  const delayingRef = useRef(delaying)
-  delayingRef.current = delaying
+  const groupDelayingRef = useRef(groupDelaying)
+  groupDelayingRef.current = groupDelaying
+  const groupSpeedTestingRef = useRef(groupSpeedTesting)
+  groupSpeedTestingRef.current = groupSpeedTesting
   const groupCountsRef = useRef(groupCounts)
   groupCountsRef.current = groupCounts
   const allProxiesRef = useRef(allProxies)
@@ -550,6 +643,18 @@ const Proxies: React.FC = () => {
   mutateRef.current = mutate
   const onProxyDelayRef = useRef(onProxyDelay)
   onProxyDelayRef.current = onProxyDelay
+  const onProxySpeedTestRef = useRef(onProxySpeedTest)
+  onProxySpeedTestRef.current = onProxySpeedTest
+  const speedTestsRef = useRef(speedTests)
+  speedTestsRef.current = speedTests
+  const speedTestProgressesRef = useRef(speedTestProgresses)
+  speedTestProgressesRef.current = speedTestProgresses
+  const speedTestErrorsRef = useRef(speedTestErrors)
+  speedTestErrorsRef.current = speedTestErrors
+  const speedTestingRef = useRef(speedTesting)
+  speedTestingRef.current = speedTesting
+  const delayTestStateRef = useRef(delayTestState)
+  delayTestStateRef.current = delayTestState
   const onChangeProxyRef = useRef(onChangeProxy)
   onChangeProxyRef.current = onChangeProxy
   const proxyDisplayLayoutRef = useRef(proxyDisplayLayout)
@@ -602,72 +707,90 @@ const Proxies: React.FC = () => {
           isLast={index === g.length - 1}
           groupDisplayLayout={groupDisplayLayoutRef.current}
           searchValue={searchValueRef.current[index]}
-          delaying={delayingRef.current[index]}
+          delaying={groupDelayingRef.current[index]}
+          speedTesting={groupSpeedTestingRef.current[index]}
           onToggle={toggleOpenRef.current}
           onUpdateSearch={updateSearchValueRef.current}
           onScrollToProxy={scrollToCurrentProxyStable}
           onGroupDelay={onGroupDelayStable}
+          onGroupSpeedTest={onGroupSpeedTestStable}
         />
       ) : (
         <div>Never See This</div>
       )
     },
-    [isOpen, scrollToCurrentProxyStable, onGroupDelayStable]
+    [isOpen, scrollToCurrentProxyStable, onGroupDelayStable, onGroupSpeedTestStable]
   )
 
-  const itemContent = useCallback((index: number, groupIndex: number) => {
-    const gc = groupCountsRef.current
-    const ap = allProxiesRef.current
-    const grps = groupsRef.current
-    const c = colsRef.current
-    const pCols = proxyCols2Ref.current
-    const pLayout = proxyDisplayLayoutRef.current
-    const showGroupSelected = showGroupSelectedProxyRef.current
-    const showTooltip = showProxyDetailTooltipRef.current
-    let innerIndex = index
-    for (let i = 0; i < groupIndex; i++) {
-      innerIndex -= gc[i]
-    }
-    const proxies = ap[groupIndex]
-    const items: ReactNode[] = []
-    for (let i = 0; i < c; i++) {
-      const proxy = proxies[innerIndex * c + i]
-      if (!proxy) continue
-      items.push(
-        <ProxyItem
-          key={proxy.name}
-          mutateProxies={mutateRef.current}
-          onProxyDelay={onProxyDelayRef.current}
-          onSelect={onChangeProxyRef.current}
-          proxy={proxy}
-          group={grps[groupIndex]}
-          proxyDisplayLayout={pLayout}
-          showGroupSelectedProxy={showGroupSelected}
-          showProxyDetailTooltip={showTooltip}
-          selected={proxy.name === grps[groupIndex].now}
-        />
+  const itemContent = useCallback(
+    (index: number, groupIndex: number) => {
+      const gc = groupCountsRef.current
+      const ap = allProxiesRef.current
+      const grps = groupsRef.current
+      const c = colsRef.current
+      const pCols = proxyCols2Ref.current
+      const pLayout = proxyDisplayLayoutRef.current
+      const showGroupSelected = showGroupSelectedProxyRef.current
+      const showTooltip = showProxyDetailTooltipRef.current
+      let innerIndex = index
+      for (let i = 0; i < groupIndex; i++) {
+        innerIndex -= gc[i]
+      }
+      const proxies = ap[groupIndex]
+      const items: ReactNode[] = []
+      for (let i = 0; i < c; i++) {
+        const proxy = proxies[innerIndex * c + i]
+        if (!proxy) continue
+        items.push(
+          <ProxyItem
+            key={proxy.name}
+            mutateProxies={mutateRef.current}
+            onProxyDelay={onProxyDelayRef.current}
+            onProxySpeedTest={onProxySpeedTestRef.current}
+            onSelect={onChangeProxyRef.current}
+            proxy={proxy}
+            group={grps[groupIndex]}
+            proxyDisplayLayout={pLayout}
+            showGroupSelectedProxy={showGroupSelected}
+            showProxyDetailTooltip={showTooltip}
+            selected={proxy.name === grps[groupIndex].now}
+            delay={getDisplayedDelay(proxy, delayTestStateRef.current)}
+            delayTesting={delayTestStateRef.current.testing.has(proxy.name)}
+            speedTest={speedTestsRef.current[proxy.name]}
+            speedTestProgress={speedTestProgressesRef.current[proxy.name]}
+            speedTestError={speedTestErrorsRef.current[proxy.name]}
+            speedTesting={speedTestingRef.current.has(proxy.name)}
+          />
+        )
+      }
+      return proxies ? (
+        <div
+          style={{
+            animation: 'proxy-row-in 0.15s ease both',
+            ...(pCols !== 'auto' ? { gridTemplateColumns: `repeat(${pCols}, minmax(0, 1fr))` } : {})
+          }}
+          className={`grid ${
+            pCols === 'auto'
+              ? 'sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
+              : ''
+          } ${
+            groupIndex === gc.length - 1 && innerIndex === gc[groupIndex] - 1 ? 'pb-2' : ''
+          } gap-2 pt-2 mx-2`}
+        >
+          {items}
+        </div>
+      ) : (
+        <div>Never See This</div>
       )
-    }
-    return proxies ? (
-      <div
-        style={{
-          animation: 'proxy-row-in 0.15s ease both',
-          ...(pCols !== 'auto' ? { gridTemplateColumns: `repeat(${pCols}, minmax(0, 1fr))` } : {})
-        }}
-        className={`grid ${
-          pCols === 'auto'
-            ? 'sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
-            : ''
-        } ${
-          groupIndex === gc.length - 1 && innerIndex === gc[groupIndex] - 1 ? 'pb-2' : ''
-        } gap-2 pt-2 mx-2`}
-      >
-        {items}
-      </div>
-    ) : (
-      <div>Never See This</div>
-    )
-  }, [])
+    },
+    [
+      speedTests,
+      speedTestProgresses,
+      speedTestErrors,
+      speedTesting,
+      delayTestState
+    ]
+  )
 
   return (
     <BasePage

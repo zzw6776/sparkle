@@ -36,10 +36,15 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
     delayTestUseGroupApi = false,
     delayTestConcurrency,
     delayTestTimeout,
+    speedTestSource = 'cloudflare',
+    speedTestUrl,
+    speedTestDuration = 8000,
+    speedTestMaxBytes = 100_000_000,
     rememberProxyGroupOpenState = false
   } = appConfig || {}
 
   const [url, setUrl] = useState(delayTestUrl ?? '')
+  const [downloadUrl, setDownloadUrl] = useState(speedTestUrl ?? '')
   const [isOpen, setIsOpen] = useState(true)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -48,10 +53,19 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
       patchAppConfig({ delayTestUrl: v })
     }, 500)
   ).current
+  const setDownloadUrlDebounce = useRef(
+    debounce((v: string) => {
+      patchAppConfig({ speedTestUrl: v })
+    }, 500)
+  ).current
 
   useEffect(() => {
     setUrl(delayTestUrl ?? '')
   }, [delayTestUrl])
+
+  useEffect(() => {
+    setDownloadUrl(speedTestUrl ?? '')
+  }, [speedTestUrl])
 
   useEffect(() => {
     return () => {
@@ -146,11 +160,12 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                   options={[
                     { id: 'default', label: '默认' },
                     { id: 'delay', label: '延迟' },
+                    { id: 'speed', label: '下载速度' },
                     { id: 'name', label: '名称' }
                   ]}
                   onChange={async (v) => {
                     await patchAppConfig({
-                      proxyDisplayOrder: v as 'default' | 'delay' | 'name'
+                      proxyDisplayOrder: v as 'default' | 'delay' | 'speed' | 'name'
                     })
                   }}
                 />
@@ -256,6 +271,68 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                   />
                 </SettingItem>
               )}
+              <SettingItem title="下载测速来源" {...settingItemProps} divider>
+                <SettingTabs
+                  ariaLabel="下载测速来源"
+                  selectedKey={speedTestSource}
+                  options={[
+                    { id: 'cloudflare', label: 'Cloudflare' },
+                    { id: 'telegram', label: 'Telegram' },
+                    { id: 'custom', label: '自定义' }
+                  ]}
+                  onChange={async (v) => {
+                    await patchAppConfig({ speedTestSource: v as SpeedTestSource })
+                  }}
+                />
+              </SettingItem>
+              {speedTestSource === 'custom' && (
+                <SettingItem title="自定义下载地址" {...settingItemProps} divider>
+                  <Input
+                    aria-label="自定义下载地址"
+                    data-setting-input="url"
+                    value={downloadUrl}
+                    placeholder="支持使用 {bytes} 作为文件大小占位符"
+                    variant="secondary"
+                    onChange={(event) => {
+                      const v = event.target.value
+                      setDownloadUrl(v)
+                      setDownloadUrlDebounce(v)
+                    }}
+                  />
+                </SettingItem>
+              )}
+              <SettingItem title="下载测速最长时间" {...settingItemProps} divider>
+                <InputGroup data-setting-input="number" variant="secondary">
+                  <InputGroup.Input
+                    aria-label="下载测速最长时间"
+                    type="number"
+                    value={speedTestDuration.toString()}
+                    min={1000}
+                    max={30000}
+                    onChange={(event) => {
+                      patchAppConfig({ speedTestDuration: parseInt(event.target.value) })
+                    }}
+                  />
+                  <InputGroup.Suffix>ms</InputGroup.Suffix>
+                </InputGroup>
+              </SettingItem>
+              <SettingItem title="下载测速最大流量" {...settingItemProps} divider>
+                <InputGroup data-setting-input="number" variant="secondary">
+                  <InputGroup.Input
+                    aria-label="下载测速最大流量"
+                    type="number"
+                    value={Math.round(speedTestMaxBytes / 1_000_000).toString()}
+                    min={2}
+                    max={1000}
+                    onChange={(event) => {
+                      patchAppConfig({
+                        speedTestMaxBytes: parseInt(event.target.value) * 1_000_000
+                      })
+                    }}
+                  />
+                  <InputGroup.Suffix>MB</InputGroup.Suffix>
+                </InputGroup>
+              </SettingItem>
               <SettingItem title="延迟测试地址" {...settingItemProps} divider>
                 <Input
                   aria-label="延迟测试地址"

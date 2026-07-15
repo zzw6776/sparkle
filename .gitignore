@@ -4,6 +4,7 @@ resources/sidecar
 extra
 dist
 out
+.sparkle-dev
 .DS_Store
 *.log*
 .idea

@@ -5,6 +5,7 @@ import { mkdir, rm } from 'fs/promises'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import { dataDir } from '../utils/dirs'
+import { is } from '@electron-toolkit/utils'
 
 const coreHookTimeout = 30000
 
@@ -30,7 +31,7 @@ function hookTouchCommand(file: string): string {
 }
 
 function coreHookDir(): string {
-  if (process.platform === 'win32' && process.env.ProgramData) {
+  if (process.platform === 'win32' && process.env.ProgramData && !is.dev) {
     return path.join(process.env.ProgramData, 'sparkle', 'core-hooks')
   }
   return path.join(dataDir(), 'core-hooks')

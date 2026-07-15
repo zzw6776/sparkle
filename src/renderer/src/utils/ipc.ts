@@ -96,6 +96,14 @@ export async function mihomoGroupDelay(group: string, url?: string): Promise<Con
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoGroupDelay', group, url))
 }
 
+export async function mihomoProxySpeedTest(proxy: string): Promise<SpeedTestResult> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoProxySpeedTest', proxy))
+}
+
+export async function cancelMihomoProxySpeedTest(): Promise<boolean> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoProxySpeedTest'))
+}
+
 export async function mihomoRulesDisable(rules: Record<string, boolean>): Promise<void> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoRulesDisable', rules))
 }

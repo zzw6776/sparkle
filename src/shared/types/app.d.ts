@@ -5,6 +5,26 @@ interface AppVersion {
 
 type AppNotificationMode = 'system' | 'toast'
 type AppNotificationVariant = 'default' | 'accent' | 'success' | 'warning' | 'danger'
+type SpeedTestSource = 'cloudflare' | 'telegram' | 'custom'
+
+interface SpeedTestResult {
+  proxy: string
+  source: SpeedTestSource
+  url: string
+  bytesPerSecond: number
+  bitsPerSecond: number
+  downloadedBytes: number
+  measuredBytes: number
+  duration: number
+  testedAt: number
+}
+
+interface SpeedTestProgress {
+  proxy: string
+  bytesPerSecond: number
+  downloadedBytes: number
+  duration: number
+}
 
 interface AppNotificationPayload {
   title: string
@@ -43,7 +63,7 @@ interface AppConfig {
   disableSystemCA: boolean
   disableNftables: boolean
   safePaths: string[]
-  proxyDisplayOrder: 'default' | 'delay' | 'name'
+  proxyDisplayOrder: 'default' | 'delay' | 'speed' | 'name'
   proxyDisplayLayout: 'hidden' | 'single' | 'double'
   groupDisplayLayout: 'hidden' | 'single' | 'double'
   showGroupSelectedProxy: boolean
@@ -118,6 +138,12 @@ interface AppConfig {
   delayTestUrl?: string
   delayTestUrlScope?: 'group' | 'global'
   delayTestTimeout?: number
+  speedTestSource?: SpeedTestSource
+  speedTestUrl?: string
+  speedTestPort?: number
+  speedTestDuration?: number
+  speedTestMaxBytes?: number
+  speedTestWarmupBytes?: number
   encryptedPassword?: number[]
   rememberProxyGroupOpenState?: boolean
   controlDns?: boolean

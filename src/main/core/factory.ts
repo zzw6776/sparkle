@@ -16,7 +16,7 @@ import {
   overridePath
 } from '../utils/dirs'
 import { parseYaml, stringifyYaml } from '../utils/yaml'
-import { copyFile, mkdir, readdir, writeFile } from 'fs/promises'
+import { copyFile, mkdir, readFile, readdir, writeFile } from 'fs/promises'
 import { deepMerge } from '../utils/merge'
 import vm from 'vm'
 import { existsSync, writeFileSync } from 'fs'
@@ -30,8 +30,18 @@ let runtimeConfigStr: string,
   overrideProfileStr: string,
   runtimeConfig: MihomoConfig
 let runtimeSpeedTestPort = 17891
+let runtimeCodexTestPorts: number[] = []
 
-export async function generateProfile(): Promise<void> {
+interface GenerateProfileOptions {
+  reuseTestPorts?: RuntimeTestPorts
+}
+
+export interface RuntimeTestPorts {
+  speedTestPort: number
+  codexTestPorts: number[]
+}
+
+export async function generateProfile(options: GenerateProfileOptions = {}): Promise<void> {
   const { current } = await getProfileConfig()
   const {
     diffWorkDir = false,
@@ -58,7 +68,7 @@ export async function generateProfile(): Promise<void> {
   const profile = deepMerge(JSON.parse(JSON.stringify(currentProfile)), configToMerge)
 
   configureDevelopmentIsolation(profile)
-  await configureSpeedTest(profile, speedTestPort)
+  await configureTestChannels(profile, speedTestPort, options.reuseTestPorts)
   await cleanProfile(profile, controlDns, controlSniff)
 
   runtimeConfig = profile
@@ -74,6 +84,44 @@ export async function generateProfile(): Promise<void> {
 
 export const SPEED_TEST_GROUP = '__SPARKLE_SPEEDTEST__'
 const SPEED_TEST_LISTENER = 'sparkle-speedtest'
+export const MAX_CODEX_TEST_CONCURRENCY = 16
+const CODEX_TEST_GROUP_PREFIX = '__SPARKLE_CODEX_TEST_'
+const CODEX_TEST_LISTENER_PREFIX = 'sparkle-codex-test-'
+
+function codexTestGroup(index: number): string {
+  return `${CODEX_TEST_GROUP_PREFIX}${index + 1}__`
+}
+
+function codexTestListener(index: number): string {
+  return `${CODEX_TEST_LISTENER_PREFIX}${index + 1}`
+}
+
+export async function getPersistedTestPorts(
+  current: string | undefined,
+  diffWorkDir: boolean
+): Promise<RuntimeTestPorts | undefined> {
+  try {
+    const configPath = diffWorkDir ? mihomoWorkConfigPath(current) : mihomoWorkConfigPath('work')
+    const profile = parseYaml<MihomoConfig>(await readFile(configPath, 'utf-8'))
+    const speedTestPort = profile.listeners?.find((item) => item.name === SPEED_TEST_LISTENER)?.port
+    const codexTestPorts = Array.from(
+      { length: MAX_CODEX_TEST_CONCURRENCY },
+      (_, index) => profile.listeners?.find((item) => item.name === codexTestListener(index))?.port
+    )
+    const ports = [speedTestPort, ...codexTestPorts]
+    if (
+      ports.some((port) => !Number.isInteger(port) || Number(port) <= 0 || Number(port) > 65535)
+    ) {
+      return undefined
+    }
+    return {
+      speedTestPort: Number(speedTestPort),
+      codexTestPorts: codexTestPorts.map(Number)
+    }
+  } catch {
+    return undefined
+  }
+}
 
 function configureDevelopmentIsolation(profile: MihomoConfig): void {
   if (!is.dev || !profile.dns) return
@@ -94,9 +142,10 @@ function isLoopbackPortAvailable(port: number): Promise<boolean> {
   })
 }
 
-async function configureSpeedTest(
+async function configureTestChannels(
   profile: MihomoConfig,
-  configuredPort: number
+  configuredPort: number,
+  reuseTestPorts?: RuntimeTestPorts
 ): Promise<void> {
   const preferredPort =
     Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535
@@ -109,45 +158,108 @@ async function configureSpeedTest(
     if (typeof value === 'number' && value > 0) occupiedPorts.add(value)
   })
   profile.listeners?.forEach((listener) => {
-    if (listener.name === SPEED_TEST_LISTENER) return
+    if (
+      listener.name === SPEED_TEST_LISTENER ||
+      Array.from({ length: MAX_CODEX_TEST_CONCURRENCY }, (_, index) =>
+        codexTestListener(index)
+      ).includes(String(listener.name))
+    ) {
+      return
+    }
     const value = listener.port
     if (typeof value === 'number' && value > 0) occupiedPorts.add(value)
   })
 
-  let port = preferredPort
-  while (
-    port <= 65535 &&
-    (occupiedPorts.has(port) || !(await isLoopbackPortAvailable(port)))
-  ) {
-    port++
+  const allocatePort = async (start: number, checkAvailability: boolean): Promise<number> => {
+    let port = start
+    while (port <= 65535) {
+      const available =
+        !occupiedPorts.has(port) && (!checkAvailability || (await isLoopbackPortAvailable(port)))
+      if (available) break
+      port++
+    }
+    if (port > 65535) throw new Error('没有可用的测速端口')
+    occupiedPorts.add(port)
+    return port
   }
-  if (port > 65535) throw new Error('没有可用的下载测速端口')
-  runtimeSpeedTestPort = port
+
+  if (reuseTestPorts) {
+    if (reuseTestPorts.codexTestPorts.length !== MAX_CODEX_TEST_CONCURRENCY) {
+      throw new Error('复用的 Codex 测试端口数量无效')
+    }
+    runtimeSpeedTestPort = await allocatePort(reuseTestPorts.speedTestPort, false)
+    runtimeCodexTestPorts = []
+    for (const port of reuseTestPorts.codexTestPorts) {
+      runtimeCodexTestPorts.push(await allocatePort(port, false))
+    }
+  } else {
+    runtimeSpeedTestPort = await allocatePort(preferredPort, true)
+    runtimeCodexTestPorts = []
+    let nextPort = runtimeSpeedTestPort + 1
+    for (let index = 0; index < MAX_CODEX_TEST_CONCURRENCY; index++) {
+      const port = await allocatePort(nextPort, true)
+      runtimeCodexTestPorts.push(port)
+      nextPort = port + 1
+    }
+  }
 
   const groups = Array.isArray(profile['proxy-groups']) ? profile['proxy-groups'] : []
-  profile['proxy-groups'] = groups.filter((group) => group.name !== SPEED_TEST_GROUP)
+  const testGroupNames = new Set([
+    SPEED_TEST_GROUP,
+    ...Array.from({ length: MAX_CODEX_TEST_CONCURRENCY }, (_, index) => codexTestGroup(index))
+  ])
+  profile['proxy-groups'] = groups.filter((group) => !testGroupNames.has(group.name))
   const selectableGroups = profile['proxy-groups'].map((group) => group.name)
-  profile['proxy-groups'].push({
-    name: SPEED_TEST_GROUP,
+  const createTestGroup = (name: string): MihomoProxyGroupConfig => ({
+    name,
     type: 'select',
     proxies: [...new Set(['DIRECT', ...selectableGroups])],
     'include-all': true,
     hidden: true
   })
+  profile['proxy-groups'].push(createTestGroup(SPEED_TEST_GROUP))
+  for (let index = 0; index < MAX_CODEX_TEST_CONCURRENCY; index++) {
+    profile['proxy-groups'].push(createTestGroup(codexTestGroup(index)))
+  }
 
   const listeners = Array.isArray(profile.listeners) ? profile.listeners : []
-  profile.listeners = listeners.filter((listener) => listener.name !== SPEED_TEST_LISTENER)
+  const testListenerNames = new Set([
+    SPEED_TEST_LISTENER,
+    ...Array.from({ length: MAX_CODEX_TEST_CONCURRENCY }, (_, index) => codexTestListener(index))
+  ])
+  profile.listeners = listeners.filter((listener) => !testListenerNames.has(String(listener.name)))
   profile.listeners.push({
     name: SPEED_TEST_LISTENER,
     type: 'mixed',
     listen: '127.0.0.1',
-    port,
+    port: runtimeSpeedTestPort,
     proxy: SPEED_TEST_GROUP
   })
+  for (let index = 0; index < MAX_CODEX_TEST_CONCURRENCY; index++) {
+    profile.listeners.push({
+      name: codexTestListener(index),
+      type: 'mixed',
+      listen: '127.0.0.1',
+      port: runtimeCodexTestPorts[index],
+      proxy: codexTestGroup(index)
+    })
+  }
 }
 
 export function getRuntimeSpeedTestPort(): number {
   return runtimeSpeedTestPort
+}
+
+export function getRuntimeCodexTestChannels(): Array<{
+  group: string
+  listener: string
+  port: number
+}> {
+  return runtimeCodexTestPorts.map((port, index) => ({
+    group: codexTestGroup(index),
+    listener: codexTestListener(index),
+    port
+  }))
 }
 
 async function cleanProfile(

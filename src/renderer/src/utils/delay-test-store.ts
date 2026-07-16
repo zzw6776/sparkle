@@ -12,6 +12,7 @@ interface GroupDelayTestOptions {
   url?: string
   useGroupApi: boolean
   concurrency?: number
+  onResult?: (proxy: string, delay: number) => void
 }
 
 interface DelayTestStoreSnapshot {
@@ -139,7 +140,7 @@ export async function runProxyDelayTest(
 }
 
 export async function runGroupDelayTest(options: GroupDelayTestOptions): Promise<DelayTestRun> {
-  const { group, proxies, url, useGroupApi, concurrency } = options
+  const { group, proxies, url, useGroupApi, concurrency, onResult } = options
   if (snapshot.groups.has(group) || proxies.length === 0) return {}
 
   const groupVersion = ++nextRunVersion
@@ -153,17 +154,27 @@ export async function runGroupDelayTest(options: GroupDelayTestOptions): Promise
     if (useGroupApi) {
       try {
         const results = await mihomoGroupDelay(group, url)
-        proxies.forEach(({ name }) => finishProxy(name, results[name] ?? 0, run[name]))
+        proxies.forEach(({ name }) => {
+          const delay = results[name] ?? 0
+          finishProxy(name, delay, run[name])
+          onResult?.(name, delay)
+        })
       } catch {
-        proxies.forEach(({ name }) => finishProxy(name, 0, run[name]))
+        proxies.forEach(({ name }) => {
+          finishProxy(name, 0, run[name])
+          onResult?.(name, 0)
+        })
       }
     } else {
       await runDelayTestsWithConcurrency(proxies, concurrency, async ({ name, provider }) => {
         try {
           const result = await mihomoProxyDelay(name, url, provider)
-          finishProxy(name, result.delay ?? 0, run[name])
+          const delay = result.delay ?? 0
+          finishProxy(name, delay, run[name])
+          onResult?.(name, delay)
         } catch {
           finishProxy(name, 0, run[name])
+          onResult?.(name, 0)
         }
       })
     }

@@ -138,7 +138,14 @@ import { showNotification } from './notification'
 import { getUserAgent } from './userAgent'
 import { appendAppLog, clearCachedMihomoLogs, getCachedMihomoLogs } from './log'
 import { ageIdentityToRecipient, generateAgeKeyPair } from './age'
-import { cancelMihomoProxySpeedTest, mihomoProxySpeedTest } from '../core/speedTest'
+import {
+  cancelMihomoProxySpeedTest,
+  mihomoGeneralSpeedTest,
+  mihomoProxySpeedTest
+} from '../core/speedTest'
+import { cancelMihomoCodexTest, mihomoCodexTest } from '../core/codexTest'
+import { cancelMihomoCodexActualTest, mihomoCodexActualTest } from '../core/codexActualTest'
+import { cancelMihomoProcessTest, mihomoProcessTest } from '../core/processTest'
 
 function ipcErrorWrapper<T>( // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: (...args: any[]) => T | Promise<T> // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -250,7 +257,59 @@ export function registerIpcMainHandlers(): void {
       }
     })
   )
+  ipcMain.handle('mihomoGeneralSpeedTest', (event, proxies, rounds, nodeConcurrency) =>
+    ipcErrorWrapper(mihomoGeneralSpeedTest)(
+      proxies,
+      rounds,
+      nodeConcurrency,
+      (progress: GeneralSpeedTestProgress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('mihomoGeneralSpeedTestProgress', progress)
+        }
+      }
+    )
+  )
   ipcMain.handle('cancelMihomoProxySpeedTest', () => cancelMihomoProxySpeedTest())
+  ipcMain.handle('mihomoCodexTest', (event, proxies, rounds, concurrency) =>
+    ipcErrorWrapper(mihomoCodexTest)(
+      proxies,
+      rounds,
+      concurrency,
+      (progress: CodexTestProgress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('mihomoCodexTestProgress', progress)
+        }
+      }
+    )
+  )
+  ipcMain.handle('cancelMihomoCodexTest', () => cancelMihomoCodexTest())
+  ipcMain.handle('mihomoCodexActualTest', (event, proxies, rounds, concurrency) =>
+    ipcErrorWrapper(mihomoCodexActualTest)(
+      proxies,
+      rounds,
+      concurrency,
+      (progress: CodexActualTestProgress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('mihomoCodexActualTestProgress', progress)
+        }
+      }
+    )
+  )
+  ipcMain.handle('cancelMihomoCodexActualTest', () => cancelMihomoCodexActualTest())
+  ipcMain.handle('mihomoProcessTest', (event, proxies, targets, rounds, concurrency) =>
+    ipcErrorWrapper(mihomoProcessTest)(
+      proxies,
+      targets,
+      rounds,
+      concurrency,
+      (progress: ProcessTestProgress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('mihomoProcessTestProgress', progress)
+        }
+      }
+    )
+  )
+  ipcMain.handle('cancelMihomoProcessTest', () => cancelMihomoProcessTest())
   ipcMain.handle('mihomoRulesDisable', (_e, rules) => ipcErrorWrapper(mihomoRulesDisable)(rules))
   ipcMain.handle('patchMihomoConfig', (_e, patch) => ipcErrorWrapper(patchMihomoConfig)(patch))
   ipcMain.handle('restartMihomoLogs', ipcErrorWrapper(restartMihomoLogs))

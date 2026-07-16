@@ -32,6 +32,7 @@ import { cropAndPadTransparent } from '@renderer/utils/image'
 import { platform } from '@renderer/utils/init'
 import { useControledMihomoConfig } from '@renderer/hooks/use-controled-mihomo-config'
 import { MdTune } from 'react-icons/md'
+import { useNavigate } from 'react-router-dom'
 import { IoPause, IoPlay } from 'react-icons/io5'
 import { compileAdvancedFilter } from '@renderer/utils/advanced-filter'
 import {
@@ -40,10 +41,16 @@ import {
   getEnhancedConnectionFilterSuggestions,
   isConnectionFilterCompletionSessionActive
 } from '@renderer/utils/connection-filter-autocomplete'
+import {
+  processTestKey,
+  selectProcessTestProcess,
+  updateProcessTestConnections
+} from '@renderer/utils/process-test-targets'
 
 let cachedConnections: ControllerConnectionDetail[] = []
 
 const Connections: React.FC = () => {
+  const navigate = useNavigate()
   const { controledMihomoConfig } = useControledMihomoConfig()
   const { 'find-process-mode': findProcessMode = 'always' } = controledMihomoConfig || {}
   const [filter, setFilter] = useState('')
@@ -413,6 +420,10 @@ const Connections: React.FC = () => {
     pausedRef.current = paused
   }, [paused])
 
+  useEffect(() => {
+    updateProcessTestConnections(allConnections)
+  }, [allConnections])
+
   const processAppNameQueue = useCallback(async () => {
     if (processingAppNames.current.size >= 3 || appNameRequestQueue.current.size === 0) return
 
@@ -587,12 +598,7 @@ const Connections: React.FC = () => {
     async (v: unknown) => {
       await patchAppConfig({
         connectionOrderBy: (v as { currentKey: string }).currentKey as
-          | 'time'
-          | 'upload'
-          | 'download'
-          | 'uploadSpeed'
-          | 'downloadSpeed'
-          | 'process'
+          'time' | 'upload' | 'download' | 'uploadSpeed' | 'downloadSpeed' | 'process'
       })
     },
     [patchAppConfig]
@@ -817,6 +823,17 @@ const Connections: React.FC = () => {
   const closeGroupStable = useCallback((key: string) => {
     closeGroupRef.current(key)
   }, [])
+  const openProcessTest = useCallback(
+    (key: string) => {
+      const targetGroup = connectionGroupsRef.current.find((item) => item.key === key)
+      if (!targetGroup) return
+      selectProcessTestProcess(
+        processTestKey(targetGroup.processPath, targetGroup.process, targetGroup.sourceIP)
+      )
+      navigate('/speed-test/process')
+    },
+    [navigate]
+  )
 
   const renderGroupMember = useCallback((i: number) => {
     const connection = flatMembersRef.current[i]
@@ -872,10 +889,11 @@ const Connections: React.FC = () => {
           displayName={displayName}
           onToggle={toggleGroupStable}
           onCloseAll={closeGroupStable}
+          onSpeedTest={openProcessTest}
         />
       )
     },
-    [toggleGroupStable, closeGroupStable]
+    [toggleGroupStable, closeGroupStable, openProcessTest]
   )
 
   return (

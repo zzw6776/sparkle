@@ -1,6 +1,6 @@
 import { ChildProcess, spawn } from 'child_process'
 import { dataDir, coreLogPath, mihomoCorePath } from '../utils/dirs'
-import { generateProfile, getRuntimeConfig } from './factory'
+import { generateProfile, getPersistedTestPorts, getRuntimeConfig } from './factory'
 import {
   getAppConfig,
   getControledMihomoConfig,
@@ -351,8 +351,6 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     throw error
   }
 
-  await generateProfile()
-  await checkProfile()
   let serviceCoreRunning = false
   if (useServiceCore) {
     try {
@@ -368,6 +366,23 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
       }
     }
   }
+
+  if (serviceCoreRunning) {
+    const persistedTestPorts = await getPersistedTestPorts(current, diffWorkDir)
+    if (persistedTestPorts === undefined) {
+      await appendAppLog(
+        '[Manager]: Running service core has incomplete test listeners, restart required\n'
+      )
+      serviceCoreRunning = false
+      await generateProfile()
+    } else {
+      await generateProfile({ reuseTestPorts: persistedTestPorts })
+    }
+  } else {
+    await generateProfile()
+  }
+  await checkProfile()
+
   if (!serviceCoreRunning) {
     await stopCore()
   }

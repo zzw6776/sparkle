@@ -16,6 +16,7 @@ const titleMap = {
   dnsCardStatus: 'DNS',
   sniffCardStatus: '域名嗅探',
   logCardStatus: '日志',
+  speedTestCardStatus: '测速',
   substoreCardStatus: 'Sub-Store'
 }
 const SiderConfig: React.FC = () => {
@@ -33,6 +34,7 @@ const SiderConfig: React.FC = () => {
     dnsCardStatus = 'col-span-1',
     sniffCardStatus = 'col-span-1',
     logCardStatus = 'col-span-1',
+    speedTestCardStatus = 'col-span-1',
     substoreCardStatus = 'col-span-1'
   } = appConfig || {}
 
@@ -49,6 +51,7 @@ const SiderConfig: React.FC = () => {
     dnsCardStatus,
     sniffCardStatus,
     logCardStatus,
+    speedTestCardStatus,
     substoreCardStatus
   }
 

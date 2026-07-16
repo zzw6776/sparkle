@@ -13,6 +13,10 @@ import Resources from '@renderer/pages/resources'
 import DNS from '@renderer/pages/dns'
 import Sniffer from '@renderer/pages/sniffer'
 import SubStore from '@renderer/pages/substore'
+import SpeedTest from '@renderer/pages/speed-test'
+import CodexTest from '@renderer/pages/codex-test'
+import GeneralSpeedTest from '@renderer/pages/general-speed-test'
+import ProcessTest from '@renderer/pages/process-test'
 const routes = [
   {
     path: '/mihomo',
@@ -49,6 +53,22 @@ const routes = [
   {
     path: '/logs',
     element: <Logs />
+  },
+  {
+    path: '/speed-test',
+    element: <SpeedTest />
+  },
+  {
+    path: '/speed-test/general',
+    element: <GeneralSpeedTest />
+  },
+  {
+    path: '/speed-test/codex',
+    element: <CodexTest />
+  },
+  {
+    path: '/speed-test/process',
+    element: <ProcessTest />
   },
   {
     path: '/connections',

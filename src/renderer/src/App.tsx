@@ -1,5 +1,5 @@
 import { useTheme } from 'next-themes'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavigateFunction, useLocation, useNavigate, useRoutes } from 'react-router-dom'
 import OutboundModeSwitcher from '@renderer/components/sider/outbound-mode-switcher'
 import SysproxySwitcher from '@renderer/components/sider/sysproxy-switcher'
@@ -17,6 +17,7 @@ import SniffCard from '@renderer/components/sider/sniff-card'
 import OverrideCard from '@renderer/components/sider/override-card'
 import ConnCard from '@renderer/components/sider/conn-card'
 import LogCard from '@renderer/components/sider/log-card'
+import SpeedTestCard from '@renderer/components/sider/speed-test-card'
 import MihomoCoreCard from '@renderer/components/sider/mihomo-core-card'
 import ResourceCard from '@renderer/components/sider/resource-card'
 import UpdaterButton from '@renderer/components/updater/updater-button'
@@ -46,6 +47,7 @@ const defaultSiderOrder = [
   'rule',
   'resource',
   'override',
+  'speedtest',
   'log',
   'substore'
 ]
@@ -63,6 +65,7 @@ const siderCardRouteMap = {
   'rule-card': '/rules',
   'resource-card': '/resources',
   'override-card': '/override',
+  'speed-test-card': '/speed-test',
   'substore-card': '/substore'
 } as const
 const siderCardSelector = Object.keys(siderCardRouteMap)
@@ -82,7 +85,15 @@ const App: React.FC = () => {
     showUpdateButtonAfterNotification = true,
     disableAnimation = false
   } = appConfig || {}
-  const siderOrderArray = siderOrder ?? defaultSiderOrder
+  const siderOrderArray = useMemo(() => {
+    if (!siderOrder) return defaultSiderOrder
+    if (siderOrder.includes('speedtest')) return siderOrder
+
+    const nextOrder = [...siderOrder]
+    const logIndex = nextOrder.indexOf('log')
+    nextOrder.splice(logIndex === -1 ? nextOrder.length : logIndex, 0, 'speedtest')
+    return nextOrder
+  }, [siderOrder])
   const narrowWidth = platform === 'darwin' ? 70 : 60
   const [order, setOrder] = useState(siderOrderArray)
   const [siderWidthValue, setSiderWidthValue] = useState(siderWidth)
@@ -276,6 +287,7 @@ const App: React.FC = () => {
     rule: RuleCard,
     resource: ResourceCard,
     override: OverrideCard,
+    speedtest: SpeedTestCard,
     substore: SubStoreCard
   }
 

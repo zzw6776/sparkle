@@ -4,6 +4,7 @@ import { calcTraffic } from '@renderer/utils/calc'
 import React, { memo, useMemo } from 'react'
 import { CgClose, CgTrash } from 'react-icons/cg'
 import { IoIosArrowBack } from 'react-icons/io'
+import { MdSpeed } from 'react-icons/md'
 
 interface Props {
   groupKey: string
@@ -21,6 +22,7 @@ interface Props {
   displayName?: string
   onToggle: (key: string, currentlyOpen: boolean) => void
   onCloseAll: (key: string) => void
+  onSpeedTest: (key: string) => void
 }
 
 const ConnectionGroupHeaderComponent: React.FC<Props> = ({
@@ -38,7 +40,8 @@ const ConnectionGroupHeaderComponent: React.FC<Props> = ({
   iconUrl,
   displayName,
   onToggle,
-  onCloseAll
+  onCloseAll,
+  onSpeedTest
 }) => {
   const title = useMemo(() => {
     if (displayName) return displayName
@@ -88,6 +91,16 @@ const ConnectionGroupHeaderComponent: React.FC<Props> = ({
                 onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
               >
+                <Button
+                  variant="light"
+                  size="sm"
+                  isIconOnly
+                  color="primary"
+                  aria-label="测试该进程的历史目标"
+                  onPress={() => onSpeedTest(groupKey)}
+                >
+                  <MdSpeed className="text-lg" />
+                </Button>
                 <Button
                   variant="light"
                   size="sm"

@@ -26,6 +26,202 @@ interface SpeedTestProgress {
   duration: number
 }
 
+type GeneralSpeedTestStage = 'selecting' | 'downloading' | 'completed'
+
+interface GeneralSpeedTestProgress {
+  proxy: string
+  round: number
+  rounds: number
+  stage: GeneralSpeedTestStage
+  completed: number
+  total: number
+  bytesPerSecond?: number
+  downloadedBytes?: number
+  duration?: number
+  result?: SpeedTestResult
+  error?: string
+}
+
+interface GeneralSpeedTestRoundResult {
+  proxy: string
+  round: number
+  result?: SpeedTestResult
+  error?: string
+}
+
+type CodexTestStage = 'selecting' | 'probing' | 'completed'
+
+interface CodexTestProgress {
+  proxy: string
+  round: number
+  rounds: number
+  stage: CodexTestStage
+  completed: number
+  total: number
+  result?: CodexTestResult
+}
+
+interface CodexTestRoundResult {
+  round: number
+  success: boolean
+  combinedMs?: number
+  tunnelMs?: number
+  tlsMs?: number
+  httpsTtfbMs?: number
+  websocketMs?: number
+  httpsStatus?: number
+  websocketStatus?: number
+  error?: string
+}
+
+interface CodexTestResult {
+  proxy: string
+  rounds: number
+  completedRounds: number
+  succeeded: number
+  failed: number
+  successRate: number
+  tunnelMs?: number
+  tlsMs?: number
+  httpsTtfbMs?: number
+  websocketMs?: number
+  totalMs?: number
+  jitterMs?: number
+  score?: number
+  httpsStatus?: number
+  websocketStatus?: number
+  error?: string
+  roundResults: CodexTestRoundResult[]
+  testedAt: number
+}
+
+type CodexActualTestStage = 'selecting' | 'starting' | 'requesting' | 'streaming' | 'completed'
+
+interface CodexActualTestTokenUsage {
+  totalTokens: number
+  inputTokens: number
+  cachedInputTokens: number
+  outputTokens: number
+  reasoningOutputTokens: number
+}
+
+interface CodexActualTestRouteEvidence {
+  inboundName: string
+  host: string
+  destinationIP: string
+  remoteDestination: string
+  dnsMode: string
+  chains: string[]
+}
+
+interface CodexActualTestRoundResult {
+  round: number
+  success: boolean
+  routeVerified: boolean
+  queueMs?: number
+  firstTokenMs?: number
+  totalMs?: number
+  model?: string
+  response?: string
+  routes?: CodexActualTestRouteEvidence[]
+  tokenUsage?: CodexActualTestTokenUsage
+  error?: string
+}
+
+interface CodexActualTestResult {
+  proxy: string
+  rounds: number
+  completedRounds: number
+  succeeded: number
+  failed: number
+  successRate: number
+  routeVerifiedRate: number
+  queueMs?: number
+  firstTokenMs?: number
+  totalMs?: number
+  jitterMs?: number
+  score?: number
+  model?: string
+  tokenUsage: CodexActualTestTokenUsage
+  error?: string
+  roundResults: CodexActualTestRoundResult[]
+  testedAt: number
+}
+
+interface CodexActualTestProgress {
+  proxy: string
+  round: number
+  rounds: number
+  stage: CodexActualTestStage
+  completed: number
+  total: number
+  model?: string
+  request?: string
+  result?: CodexActualTestResult
+}
+
+type CodexActualTestLogLevel = 'info' | 'success' | 'error'
+
+interface CodexActualTestLogEntry {
+  id: string
+  timestamp: number
+  level: CodexActualTestLogLevel
+  message: string
+  proxy?: string
+  round?: number
+}
+
+interface ProcessTestTargetRequest {
+  host: string
+  port: number
+}
+
+interface ProcessTestRoundResult {
+  round: number
+  success: boolean
+  connectMs?: number
+  tlsMs?: number
+  totalMs?: number
+  error?: string
+}
+
+interface ProcessTestDomainResult extends ProcessTestTargetRequest {
+  succeeded: number
+  failed: number
+  successRate: number
+  connectMs?: number
+  tlsMs?: number
+  totalMs?: number
+  roundResults: ProcessTestRoundResult[]
+}
+
+interface ProcessTestResult {
+  proxy: string
+  targetCount: number
+  completedSamples: number
+  totalSamples: number
+  successRate: number
+  medianMs?: number
+  p95Ms?: number
+  failedTargets: number
+  score?: number
+  domains: ProcessTestDomainResult[]
+  testedAt: number
+}
+
+type ProcessTestStage = 'selecting' | 'probing' | 'completed'
+
+interface ProcessTestProgress {
+  proxy: string
+  target?: string
+  round?: number
+  rounds: number
+  stage: ProcessTestStage
+  completed: number
+  total: number
+  result?: ProcessTestResult
+}
+
 interface AppNotificationPayload {
   title: string
   body?: string
@@ -83,6 +279,7 @@ interface AppConfig {
   connectionCardStatus?: CardStatus
   dnsCardStatus?: CardStatus
   logCardStatus?: CardStatus
+  speedTestCardStatus?: CardStatus
   pauseSSID?: string[]
   mihomoCoreCardStatus?: CardStatus
   overrideCardStatus?: CardStatus
@@ -144,6 +341,11 @@ interface AppConfig {
   speedTestDuration?: number
   speedTestMaxBytes?: number
   speedTestWarmupBytes?: number
+  speedTestConnections?: number
+  generalTestRounds?: number
+  generalTestNodeConcurrency?: number
+  generalTestConfigExpanded?: boolean
+  codexTestConcurrency?: number
   encryptedPassword?: number[]
   rememberProxyGroupOpenState?: boolean
   controlDns?: boolean

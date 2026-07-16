@@ -40,6 +40,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
     speedTestUrl,
     speedTestDuration = 8000,
     speedTestMaxBytes = 100_000_000,
+    speedTestConnections = 4,
     rememberProxyGroupOpenState = false
   } = appConfig || {}
 
@@ -331,6 +332,24 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                     }}
                   />
                   <InputGroup.Suffix>MB</InputGroup.Suffix>
+                </InputGroup>
+              </SettingItem>
+              <SettingItem title="单节点下载连接数" {...settingItemProps} divider>
+                <InputGroup data-setting-input="number" variant="secondary">
+                  <InputGroup.Input
+                    aria-label="单节点下载连接数"
+                    type="number"
+                    value={speedTestConnections.toString()}
+                    min={1}
+                    max={16}
+                    onChange={(event) => {
+                      const value = parseInt(event.target.value)
+                      if (!Number.isFinite(value)) return
+                      patchAppConfig({
+                        speedTestConnections: Math.min(16, Math.max(1, value))
+                      })
+                    }}
+                  />
                 </InputGroup>
               </SettingItem>
               <SettingItem title="延迟测试地址" {...settingItemProps} divider>

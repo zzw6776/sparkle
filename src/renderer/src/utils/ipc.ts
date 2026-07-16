@@ -100,8 +100,72 @@ export async function mihomoProxySpeedTest(proxy: string): Promise<SpeedTestResu
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoProxySpeedTest', proxy))
 }
 
+export async function mihomoGeneralSpeedTest(
+  proxies: string[],
+  rounds: number,
+  nodeConcurrency: number
+): Promise<GeneralSpeedTestRoundResult[]> {
+  return ipcErrorWrapper(
+    await window.electron.ipcRenderer.invoke(
+      'mihomoGeneralSpeedTest',
+      proxies,
+      rounds,
+      nodeConcurrency
+    )
+  )
+}
+
 export async function cancelMihomoProxySpeedTest(): Promise<boolean> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoProxySpeedTest'))
+}
+
+export async function mihomoCodexTest(
+  proxies: string[],
+  rounds: number,
+  concurrency: number
+): Promise<CodexTestResult[]> {
+  return ipcErrorWrapper(
+    await window.electron.ipcRenderer.invoke('mihomoCodexTest', proxies, rounds, concurrency)
+  )
+}
+
+export async function cancelMihomoCodexTest(): Promise<boolean> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoCodexTest'))
+}
+
+export async function mihomoCodexActualTest(
+  proxies: string[],
+  rounds: number,
+  concurrency: number
+): Promise<CodexActualTestResult[]> {
+  return ipcErrorWrapper(
+    await window.electron.ipcRenderer.invoke('mihomoCodexActualTest', proxies, rounds, concurrency)
+  )
+}
+
+export async function cancelMihomoCodexActualTest(): Promise<boolean> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoCodexActualTest'))
+}
+
+export async function mihomoProcessTest(
+  proxies: string[],
+  targets: ProcessTestTargetRequest[],
+  rounds: number,
+  concurrency: number
+): Promise<ProcessTestResult[]> {
+  return ipcErrorWrapper(
+    await window.electron.ipcRenderer.invoke(
+      'mihomoProcessTest',
+      proxies,
+      targets,
+      rounds,
+      concurrency
+    )
+  )
+}
+
+export async function cancelMihomoProcessTest(): Promise<boolean> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoProcessTest'))
 }
 
 export async function mihomoRulesDisable(rules: Record<string, boolean>): Promise<void> {

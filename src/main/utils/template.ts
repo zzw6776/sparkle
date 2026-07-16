@@ -46,6 +46,7 @@ export const defaultConfig: AppConfig = {
     'rule',
     'resource',
     'override',
+    'speedtest',
     'log',
     'substore'
   ],
@@ -70,6 +71,11 @@ export const defaultConfig: AppConfig = {
   speedTestDuration: 8000,
   speedTestMaxBytes: 100_000_000,
   speedTestWarmupBytes: 1_000_000,
+  speedTestConnections: 4,
+  generalTestRounds: 3,
+  generalTestNodeConcurrency: 1,
+  generalTestConfigExpanded: false,
+  codexTestConcurrency: 6,
   showProxyDetailTooltip: false
 }
 

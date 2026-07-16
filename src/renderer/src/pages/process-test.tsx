@@ -7,10 +7,23 @@ import {
   Input,
   Progress,
   Select,
-  SelectItem,
-  Tooltip
+  SelectItem
 } from '@heroui/react'
 import BasePage from '@renderer/components/base/base-page'
+import {
+  TestResultActionHeader,
+  TestResultEmptyState,
+  TestResultNodeCell,
+  TestPageControlRow,
+  TestPageControls,
+  TestResultSortHeader,
+  TestResultSwitchAction,
+  TestResultTableHeader,
+  TestResultTableRow,
+  TestResultTableViewport,
+  TestResultTooltip,
+  TestResultVirtualRows
+} from '@renderer/components/speed-test/test-result-table'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
 import { useGroups } from '@renderer/hooks/use-groups'
 import {
@@ -45,15 +58,7 @@ import {
   useSyncExternalStore
 } from 'react'
 import { IoIosArrowBack } from 'react-icons/io'
-import {
-  MdArrowDownward,
-  MdArrowUpward,
-  MdCheckCircle,
-  MdClearAll,
-  MdErrorOutline,
-  MdStop,
-  MdUnfoldMore
-} from 'react-icons/md'
+import { MdCheckCircle, MdClearAll, MdErrorOutline, MdStop } from 'react-icons/md'
 import { useNavigate } from 'react-router-dom'
 
 type SortKey = 'name' | 'score' | 'successRate' | 'medianMs' | 'p95Ms' | 'failedTargets' | 'grade'
@@ -63,6 +68,8 @@ const MIN_CONCURRENCY = 1
 const MAX_CONCURRENCY = 16
 const PROCESS_TEST_SELECTION_KEY = 'sparkle:process-test-selection'
 const FOLLOW_TEST_GROUP = '__FOLLOW_TEST_GROUP__'
+const PROCESS_TABLE_COLUMNS = 'grid-cols-[minmax(180px,1.7fr)_repeat(5,minmax(86px,1fr))_82px_72px]'
+const EMPTY_PROCESS_RESULTS: Record<string, ProcessTestResult> = {}
 
 const stageText: Record<ProcessTestStage, string> = {
   selecting: '正在切换测试节点',
@@ -126,8 +133,9 @@ const ProcessMetricResult: React.FC<ProcessMetricResultProps> = (props) => {
   if (!result) return <span>—</span>
 
   return (
-    <Tooltip
+    <TestResultTooltip
       placement="top"
+      closeDelay={0}
       isOpen={isOpen}
       onOpenChange={setIsOpen}
       content={
@@ -165,7 +173,7 @@ const ProcessMetricResult: React.FC<ProcessMetricResultProps> = (props) => {
       }
     >
       <span className="inline-flex">{metric(value)}</span>
-    </Tooltip>
+    </TestResultTooltip>
   )
 }
 /* eslint-enable react/prop-types */
@@ -179,6 +187,7 @@ interface ProcessTestRowProps {
   isCurrent: boolean
   isSwitching: boolean
   switchBusy: boolean
+  switchGroupName?: string
   onSelectedChange: (proxy: string, selected: boolean) => void
   onSwitch: (proxy: string) => void
 }
@@ -194,29 +203,24 @@ const ProcessTestRow = memo<ProcessTestRowProps>((props) => {
     isCurrent,
     isSwitching,
     switchBusy,
+    switchGroupName,
     onSelectedChange,
     onSwitch
   } = props
   const grade = result ? resultGrade(result) : undefined
 
   return (
-    <div className="grid grid-cols-[minmax(180px,1.8fr)_repeat(5,minmax(86px,1fr))_82px_72px] items-center gap-2 border-b border-divider/60 px-4 py-3 text-sm last:border-b-0">
-      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-        <Checkbox
-          aria-label={`选择节点 ${proxy.name}`}
-          className="shrink-0"
-          classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-          isSelected={selected}
-          isDisabled={testing}
-          onValueChange={(checked) => onSelectedChange(proxy.name, checked)}
-        />
-        <span className="flag-emoji block min-w-0 flex-1 truncate" title={proxy.name}>
-          {proxy.name}
-        </span>
-      </div>
+    <TestResultTableRow columnsClassName={PROCESS_TABLE_COLUMNS}>
+      <TestResultNodeCell
+        name={proxy.name}
+        selected={selected}
+        disabled={testing}
+        onSelectedChange={(checked) => onSelectedChange(proxy.name, checked)}
+      />
       <ProcessMetricResult result={result} value={result?.score} title="综合耗时" />
       {result ? (
-        <Tooltip
+        <TestResultTooltip
+          closeDelay={0}
           content={
             <div className="space-y-1 px-1 py-0.5 text-xs">
               <div>
@@ -230,7 +234,7 @@ const ProcessTestRow = memo<ProcessTestRowProps>((props) => {
           }
         >
           <span className="inline-flex">{Math.round(result.successRate * 100)}%</span>
-        </Tooltip>
+        </TestResultTooltip>
       ) : (
         <span>—</span>
       )}
@@ -249,26 +253,15 @@ const ProcessTestRow = memo<ProcessTestRowProps>((props) => {
       ) : (
         <span className="text-xs text-foreground-400">未测试</span>
       )}
-      <Tooltip
-        placement="top"
-        isDisabled={canSwitch}
-        content={canSwitch ? '' : '切换目标组不包含该节点'}
-      >
-        <span>
-          <Button
-            size="sm"
-            color={isCurrent ? 'success' : 'primary'}
-            variant="flat"
-            className="min-w-0 px-2"
-            isLoading={isSwitching}
-            isDisabled={switchBusy || isCurrent || !canSwitch}
-            onPress={() => onSwitch(proxy.name)}
-          >
-            {isCurrent ? '当前' : canSwitch ? '切换' : '不可用'}
-          </Button>
-        </span>
-      </Tooltip>
-    </div>
+      <TestResultSwitchAction
+        groupName={switchGroupName}
+        canSwitch={canSwitch}
+        isCurrent={isCurrent}
+        isLoading={isSwitching}
+        switchBusy={switchBusy}
+        onPress={() => onSwitch(proxy.name)}
+      />
+    </TestResultTableRow>
   )
 })
 ProcessTestRow.displayName = 'ProcessTestRow'
@@ -310,11 +303,14 @@ const ProcessTest: React.FC = () => {
     return new Set(initialProcessKeys)
   })
   const [processSearch, setProcessSearch] = useState('')
-  const [groupName, setGroupName] = useState('')
+  const processPickerRef = useRef<HTMLInputElement>(null)
+  const [groupName, setGroupName] = useState(() => groups[0]?.name || '')
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
   const [switchingProxy, setSwitchingProxy] = useState<string>()
   const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set())
-  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set())
+  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(
+    () => new Set(groups[0]?.all.filter(isTestableProxy).map((proxy) => proxy.name) || [])
+  )
   const [rounds, setRounds] = useState(3)
   const [concurrency, setConcurrency] = useState(() =>
     normalizeConcurrency(appConfig?.codexTestConcurrency)
@@ -343,24 +339,40 @@ const ProcessTest: React.FC = () => {
       (left, right) => right.lastSeen - left.lastSeen || left.key.localeCompare(right.key)
     )
   }, [selectedCatalogs])
-  const selectedProcessSelectionKey = processSelectionKey(selectedProcessKeys)
-  const combinedDomainSelectionKey = combinedDomains.map((domain) => domain.key).join('\u0000')
-  const testingProcessSelectionKey = processSelectionKey(state.processKeys || [])
-  const testingCatalogs = catalogs.filter((catalog) => state.processKeys?.includes(catalog.key))
+  const selectedProcessSelectionKey = useMemo(
+    () => processSelectionKey(selectedProcessKeys),
+    [selectedProcessKeys]
+  )
+  const combinedDomainSelectionKey = useMemo(
+    () => combinedDomains.map((domain) => domain.key).join('\u0000'),
+    [combinedDomains]
+  )
+  const testingProcessSelectionKey = useMemo(
+    () => processSelectionKey(state.processKeys || []),
+    [state.processKeys]
+  )
+  const testingCatalogs = useMemo(
+    () => catalogs.filter((catalog) => state.processKeys?.includes(catalog.key)),
+    [catalogs, state.processKeys]
+  )
   const group = groups.find((item) => item.name === groupName) || groups[0]
   const switchGroup =
     switchGroupName === FOLLOW_TEST_GROUP
       ? group
       : groups.find((item) => item.name === switchGroupName) || group
+  const switchableProxyNames = useMemo(
+    () => new Set(switchGroup?.all.map((item) => item.name) || []),
+    [switchGroup]
+  )
   const proxies = useMemo(() => {
     const unique = new Map<string, ControllerProxiesDetail>()
     group?.all.filter(isTestableProxy).forEach((proxy) => unique.set(proxy.name, proxy))
     return [...unique.values()]
   }, [group])
-  const proxyKey = proxies.map((proxy) => proxy.name).join('\u0000')
+  const proxyKey = useMemo(() => proxies.map((proxy) => proxy.name).join('\u0000'), [proxies])
   const visibleResults =
     testingProcessSelectionKey && selectedProcessSelectionKey !== testingProcessSelectionKey
-      ? {}
+      ? EMPTY_PROCESS_RESULTS
       : state.results
 
   useEffect(() => {
@@ -383,15 +395,23 @@ const ProcessTest: React.FC = () => {
     const restoredKeys = preferredProcessKeysRef.current.filter((key) =>
       catalogs.some((catalog) => catalog.key === key)
     )
-    setSelectedProcessKeys(
-      new Set(restoredKeys.length > 0 ? restoredKeys : catalogs[0] ? [catalogs[0].key] : [])
-    )
+    const nextKeys = restoredKeys.length > 0 ? restoredKeys : catalogs[0] ? [catalogs[0].key] : []
+    setSelectedProcessKeys((current) => {
+      if (current.size === nextKeys.length && nextKeys.every((key) => current.has(key))) {
+        return current
+      }
+      return new Set(nextKeys)
+    })
   }, [catalogs, selectedProcessKeys.size])
 
   useEffect(() => {
-    setSelectedDomains(
-      new Set(combinedDomainSelectionKey ? combinedDomainSelectionKey.split('\u0000') : [])
-    )
+    const nextDomains = combinedDomainSelectionKey ? combinedDomainSelectionKey.split('\u0000') : []
+    setSelectedDomains((current) => {
+      if (current.size === nextDomains.length && nextDomains.every((key) => current.has(key))) {
+        return current
+      }
+      return new Set(nextDomains)
+    })
   }, [combinedDomainSelectionKey, selectedProcessSelectionKey])
 
   useEffect(() => {
@@ -413,7 +433,13 @@ const ProcessTest: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    setSelectedNodes(new Set(proxies.map((proxy) => proxy.name)))
+    const nextNames = proxies.map((proxy) => proxy.name)
+    setSelectedNodes((current) => {
+      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
+        return current
+      }
+      return new Set(nextNames)
+    })
   }, [group?.name, proxyKey])
 
   useEffect(() => {
@@ -422,12 +448,17 @@ const ProcessTest: React.FC = () => {
     }
   }, [appConfig?.codexTestConcurrency, state.testing])
 
-  const selectedProxyNames = proxies
-    .filter((proxy) => selectedNodes.has(proxy.name))
-    .map((proxy) => proxy.name)
-  const selectedTargets = combinedDomains
-    .filter((domain) => selectedDomains.has(domain.key))
-    .map(({ host, port }) => ({ host, port }))
+  const selectedProxyNames = useMemo(
+    () => proxies.filter((proxy) => selectedNodes.has(proxy.name)).map((proxy) => proxy.name),
+    [proxies, selectedNodes]
+  )
+  const selectedTargets = useMemo(
+    () =>
+      combinedDomains
+        .filter((domain) => selectedDomains.has(domain.key))
+        .map(({ host, port }) => ({ host, port })),
+    [combinedDomains, selectedDomains]
+  )
   const allDomainsSelected = Boolean(
     combinedDomains.length && selectedTargets.length === combinedDomains.length
   )
@@ -436,7 +467,6 @@ const ProcessTest: React.FC = () => {
     ? Math.min(100, (state.progress.completed / state.progress.total) * 100)
     : 0
   const rows = useMemo(() => {
-    if (state.testing) return proxies
     return [...proxies].sort((left, right) => {
       const leftValue = sortValue(left, visibleResults[left.name], sortKey)
       const rightValue = sortValue(right, visibleResults[right.name], sortKey)
@@ -451,7 +481,7 @@ const ProcessTest: React.FC = () => {
           : Number(leftValue) - Number(rightValue)
       return sortDirection === 'asc' ? compared : -compared
     })
-  }, [proxies, sortDirection, sortKey, state.testing, visibleResults])
+  }, [proxies, sortDirection, sortKey, visibleResults])
 
   const toggleSort = (key: SortKey): void => {
     if (key === sortKey) {
@@ -498,23 +528,44 @@ const ProcessTest: React.FC = () => {
   )
 
   const sortHeader = (key: SortKey, label: string): React.ReactNode => (
-    <Button
-      size="sm"
-      variant="light"
-      className="h-6 min-w-0 justify-start gap-0.5 px-0 text-xs text-foreground-500"
-      endContent={
-        key !== sortKey ? (
-          <MdUnfoldMore className="shrink-0 text-sm opacity-50" />
-        ) : sortDirection === 'asc' ? (
-          <MdArrowUpward className="shrink-0 text-sm" />
-        ) : (
-          <MdArrowDownward className="shrink-0 text-sm" />
-        )
-      }
+    <TestResultSortHeader
+      label={label}
+      active={key === sortKey}
+      direction={sortDirection}
       onPress={() => toggleSort(key)}
-    >
-      <span className="truncate">{label}</span>
-    </Button>
+    />
+  )
+
+  const renderedRows = useMemo(
+    () =>
+      rows.map((proxy) => (
+        <ProcessTestRow
+          key={proxy.name}
+          proxy={proxy}
+          result={visibleResults[proxy.name]}
+          selected={selectedNodes.has(proxy.name)}
+          testing={state.testing}
+          canSwitch={switchableProxyNames.has(proxy.name)}
+          isCurrent={switchGroup?.now === proxy.name}
+          isSwitching={switchingProxy === proxy.name}
+          switchBusy={Boolean(switchingProxy)}
+          switchGroupName={switchGroup?.name}
+          onSelectedChange={changeNodeSelection}
+          onSwitch={switchProxy}
+        />
+      )),
+    [
+      changeNodeSelection,
+      rows,
+      selectedNodes,
+      state.testing,
+      switchableProxyNames,
+      switchingProxy,
+      switchGroup?.name,
+      switchGroup?.now,
+      switchProxy,
+      visibleResults
+    ]
   )
 
   return (
@@ -533,229 +584,229 @@ const ProcessTest: React.FC = () => {
       }
     >
       <div className="flex min-h-full w-full flex-col">
-        <section className="border-b border-divider p-3">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <Autocomplete
-                label="添加进程"
-                size="sm"
-                className="min-w-56 flex-1"
-                placeholder="搜索进程名称、路径或来源 IP"
-                inputValue={processSearch}
-                selectedKey={null}
-                isClearable
-                onInputChange={setProcessSearch}
-                onClear={() => setProcessSearch('')}
-                onSelectionChange={(key) => {
-                  if (!key) return
-                  selectionTouchedRef.current = true
-                  setSelectedProcessKeys((current) => {
-                    const next = new Set(current)
-                    const processKey = String(key)
-                    if (next.has(processKey)) next.delete(processKey)
-                    else next.add(processKey)
-                    return next
-                  })
-                }}
-              >
-                {catalogs.map((item) => (
-                  <AutocompleteItem
-                    key={item.key}
-                    textValue={`${processLabel(item)} ${item.processPath} ${item.sourceIP}`}
-                    startContent={
-                      selectedProcessKeys.has(item.key) ? (
-                        <MdCheckCircle className="shrink-0 text-success" />
-                      ) : undefined
-                    }
-                  >
-                    {processLabel(item)}（{item.domains.length} 个目标）
-                  </AutocompleteItem>
-                ))}
-              </Autocomplete>
-
-              <Button
-                size="sm"
-                variant="flat"
-                startContent={<MdClearAll className="text-lg" />}
-                isDisabled={selectedProcessKeys.size === 0}
-                onPress={() => {
-                  selectionTouchedRef.current = true
-                  setSelectedProcessKeys(new Set())
-                }}
-              >
-                清空进程
-              </Button>
-
-              <Select
-                label="测试节点组"
-                size="sm"
-                className="min-w-52 flex-1"
-                classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                selectedKeys={group ? new Set([group.name]) : new Set()}
-                disallowEmptySelection
-                isDisabled={state.testing || groups.length === 0}
-                onSelectionChange={(keys) => {
-                  const next = keys.currentKey
-                  if (next) setGroupName(String(next))
-                }}
-              >
-                {groups.map((item) => (
-                  <SelectItem key={item.name}>{item.name}</SelectItem>
-                ))}
-              </Select>
-
-              <Select
-                label="切换目标组"
-                size="sm"
-                className="min-w-52 flex-1"
-                selectedKeys={new Set([switchGroupName])}
-                disallowEmptySelection
-                isDisabled={groups.length === 0}
-                onSelectionChange={(keys) => {
-                  const next = keys.currentKey
-                  if (next) setSwitchGroupName(String(next))
-                }}
-              >
-                {[
-                  { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
-                  ...groups.map((item) => ({ key: item.name, label: item.name }))
-                ].map((item) => (
-                  <SelectItem key={item.key}>{item.label}</SelectItem>
-                ))}
-              </Select>
-
-              <div>
-                <div className="mb-1 text-xs text-foreground-500">测试轮数</div>
-                <div className="flex gap-1">
-                  {[1, 3, 5].map((value) => (
-                    <Button
-                      key={value}
-                      size="sm"
-                      className="min-w-16 data-[disabled=true]:opacity-100"
-                      color={rounds === value ? 'primary' : 'default'}
-                      variant={rounds === value ? 'solid' : 'flat'}
-                      isDisabled={state.testing}
-                      onPress={() => setRounds(value)}
-                    >
-                      {value} 轮
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              <Input
-                label="并发节点"
-                type="number"
-                size="sm"
-                className="w-28"
-                classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                min={MIN_CONCURRENCY}
-                max={MAX_CONCURRENCY}
-                value={concurrency.toString()}
-                isDisabled={state.testing}
-                onValueChange={(value) => {
-                  const parsed = Number(value)
-                  if (Number.isFinite(parsed)) setConcurrency(normalizeConcurrency(parsed))
-                }}
-                onBlur={() => void patchAppConfig({ codexTestConcurrency: concurrency })}
-              />
-
-              {state.testing ? (
-                <Button
-                  color="danger"
-                  variant="flat"
-                  isLoading={state.cancelling}
-                  startContent={state.cancelling ? undefined : <MdStop />}
-                  onPress={() => void stopProcessTest()}
-                >
-                  停止测试
-                </Button>
-              ) : (
-                <Button
-                  color="primary"
-                  variant="solid"
-                  isDisabled={selectedProxyNames.length === 0 || selectedTargets.length === 0}
-                  onPress={() =>
-                    void runProcessTest(selectedProxyNames, selectedTargets, rounds, concurrency, [
-                      ...selectedProcessKeys
-                    ])
+        <TestPageControls>
+          <TestPageControlRow>
+            <Autocomplete
+              ref={processPickerRef}
+              label="添加进程"
+              size="sm"
+              className="min-w-56 flex-1"
+              placeholder="搜索进程名称、路径或来源 IP"
+              inputValue={processSearch}
+              selectedKey={null}
+              isClearable
+              onInputChange={setProcessSearch}
+              onClear={() => setProcessSearch('')}
+              onSelectionChange={(key) => {
+                if (!key) return
+                selectionTouchedRef.current = true
+                setSelectedProcessKeys((current) => {
+                  const next = new Set(current)
+                  const processKey = String(key)
+                  if (next.has(processKey)) next.delete(processKey)
+                  else next.add(processKey)
+                  return next
+                })
+                processPickerRef.current?.blur()
+              }}
+            >
+              {catalogs.map((item) => (
+                <AutocompleteItem
+                  key={item.key}
+                  textValue={`${processLabel(item)} ${item.processPath} ${item.sourceIP}`}
+                  startContent={
+                    selectedProcessKeys.has(item.key) ? (
+                      <MdCheckCircle className="shrink-0 text-success" />
+                    ) : undefined
                   }
                 >
-                  测试 {selectedProxyNames.length} 个节点
-                </Button>
-              )}
-            </div>
+                  {processLabel(item)}（{item.domains.length} 个目标）
+                </AutocompleteItem>
+              ))}
+            </Autocomplete>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-foreground-500">
-                已选进程 {selectedCatalogs.length} 个：
-              </span>
-              {selectedCatalogs.length === 0 ? (
-                <span className="text-xs text-foreground-400">未选择</span>
-              ) : (
-                selectedCatalogs.map((item) => (
-                  <Chip
-                    key={item.key}
+            <Button
+              size="sm"
+              variant="flat"
+              startContent={<MdClearAll className="text-lg" />}
+              isDisabled={selectedProcessKeys.size === 0}
+              onPress={() => {
+                selectionTouchedRef.current = true
+                setSelectedProcessKeys(new Set())
+              }}
+            >
+              清空进程
+            </Button>
+
+            <Select
+              label="测试节点组"
+              size="sm"
+              className="min-w-52 flex-1"
+              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+              selectedKeys={group ? new Set([group.name]) : new Set()}
+              disallowEmptySelection
+              isDisabled={state.testing || groups.length === 0}
+              onSelectionChange={(keys) => {
+                const next = keys.currentKey
+                if (next) setGroupName(String(next))
+              }}
+            >
+              {groups.map((item) => (
+                <SelectItem key={item.name}>{item.name}</SelectItem>
+              ))}
+            </Select>
+
+            <Select
+              label="切换目标组"
+              size="sm"
+              className="min-w-52 flex-1"
+              selectedKeys={new Set([switchGroupName])}
+              disallowEmptySelection
+              isDisabled={groups.length === 0}
+              onSelectionChange={(keys) => {
+                const next = keys.currentKey
+                if (next) setSwitchGroupName(String(next))
+              }}
+            >
+              {[
+                { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
+                ...groups.map((item) => ({ key: item.name, label: item.name }))
+              ].map((item) => (
+                <SelectItem key={item.key}>{item.label}</SelectItem>
+              ))}
+            </Select>
+
+            <div>
+              <div className="mb-1 text-xs text-foreground-500">测试轮数</div>
+              <div className="flex gap-1">
+                {[1, 3, 5].map((value) => (
+                  <Button
+                    key={value}
                     size="sm"
-                    variant="flat"
-                    onClose={() => {
-                      selectionTouchedRef.current = true
-                      setSelectedProcessKeys((current) => {
-                        const next = new Set(current)
-                        next.delete(item.key)
-                        return next
-                      })
-                    }}
+                    className="min-w-16 data-[disabled=true]:opacity-100"
+                    color={rounds === value ? 'primary' : 'default'}
+                    variant={rounds === value ? 'solid' : 'flat'}
+                    isDisabled={state.testing}
+                    onPress={() => setRounds(value)}
                   >
-                    {processLabel(item)} · {item.domains.length} 个目标
-                  </Chip>
-                ))
-              )}
+                    {value} 轮
+                  </Button>
+                ))}
+              </div>
             </div>
 
-            <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
-              来源：连接监控保留的活动连接和最近约 200 条关闭记录。443 端口测试代理 CONNECT +
-              TLS，其他 TCP 端口只测试 CONNECT；不会发送 HTTP 请求或业务数据。
-            </div>
+            <Input
+              label="并发节点"
+              type="number"
+              size="sm"
+              className="w-28"
+              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+              min={MIN_CONCURRENCY}
+              max={MAX_CONCURRENCY}
+              value={concurrency.toString()}
+              isDisabled={state.testing}
+              onValueChange={(value) => {
+                const parsed = Number(value)
+                if (Number.isFinite(parsed)) setConcurrency(normalizeConcurrency(parsed))
+              }}
+              onBlur={() => void patchAppConfig({ codexTestConcurrency: concurrency })}
+            />
 
-            {state.savedAt &&
-              testingProcessSelectionKey === selectedProcessSelectionKey &&
-              !state.testing && (
-                <div className="text-xs text-foreground-500">
-                  已恢复上次测试结果 · {formatTestHistoryTime(state.savedAt)}
-                </div>
-              )}
+            {state.testing ? (
+              <Button
+                color="danger"
+                variant="flat"
+                isLoading={state.cancelling}
+                startContent={state.cancelling ? undefined : <MdStop />}
+                onPress={() => void stopProcessTest()}
+              >
+                停止测试
+              </Button>
+            ) : (
+              <Button
+                color="primary"
+                variant="solid"
+                isDisabled={selectedProxyNames.length === 0 || selectedTargets.length === 0}
+                onPress={() =>
+                  void runProcessTest(selectedProxyNames, selectedTargets, rounds, concurrency, [
+                    ...selectedProcessKeys
+                  ])
+                }
+              >
+                测试 {selectedProxyNames.length} 个节点
+              </Button>
+            )}
+          </TestPageControlRow>
 
-            {state.testing && state.progress && (
-              <div>
-                <div className="mb-1 flex justify-between gap-3 text-xs">
-                  <span className="min-w-0 truncate flag-emoji">
-                    {stageText[state.progress.stage]}：{state.progress.proxy}
-                    {state.progress.target ? ` · ${state.progress.target}` : ''}
-                    {state.progress.round
-                      ? ` · 第 ${state.progress.round}/${state.progress.rounds} 轮`
-                      : ''}
-                  </span>
-                  <span className="shrink-0">
-                    {state.progress.completed}/{state.progress.total}
-                  </span>
-                </div>
-                <Progress aria-label="进程测速进度" value={progressValue} color="primary" />
-              </div>
-            )}
-            {state.testing && testingProcessSelectionKey !== selectedProcessSelectionKey && (
-              <div className="rounded-xl bg-warning/10 px-3 py-2 text-sm text-warning-700 dark:text-warning-400">
-                后台仍在测试：{processSelectionLabel(testingCatalogs)}。当前选择为
-                {processSelectionLabel(selectedCatalogs)}，不会改变正在执行的目标。
-              </div>
-            )}
-            {state.error && !state.testing && (
-              <div className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
-                {state.error}
-              </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-foreground-500">
+              已选进程 {selectedCatalogs.length} 个：
+            </span>
+            {selectedCatalogs.length === 0 ? (
+              <span className="text-xs text-foreground-400">未选择</span>
+            ) : (
+              selectedCatalogs.map((item) => (
+                <Chip
+                  key={item.key}
+                  size="sm"
+                  variant="flat"
+                  onClose={() => {
+                    selectionTouchedRef.current = true
+                    setSelectedProcessKeys((current) => {
+                      const next = new Set(current)
+                      next.delete(item.key)
+                      return next
+                    })
+                  }}
+                >
+                  {processLabel(item)} · {item.domains.length} 个目标
+                </Chip>
+              ))
             )}
           </div>
-        </section>
+
+          <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
+            来源：连接监控保留的活动连接和最近约 200 条关闭记录。443 端口测试代理 CONNECT +
+            TLS，其他 TCP 端口只测试 CONNECT；不会发送 HTTP 请求或业务数据。
+          </div>
+
+          {state.savedAt &&
+            testingProcessSelectionKey === selectedProcessSelectionKey &&
+            !state.testing && (
+              <div className="text-xs text-foreground-500">
+                已恢复上次测试结果 · {formatTestHistoryTime(state.savedAt)}
+              </div>
+            )}
+
+          {state.testing && state.progress && (
+            <div>
+              <div className="mb-1 flex justify-between gap-3 text-xs">
+                <span className="min-w-0 truncate flag-emoji">
+                  {stageText[state.progress.stage]}：{state.progress.proxy}
+                  {state.progress.target ? ` · ${state.progress.target}` : ''}
+                  {state.progress.round
+                    ? ` · 第 ${state.progress.round}/${state.progress.rounds} 轮`
+                    : ''}
+                </span>
+                <span className="shrink-0">
+                  {state.progress.completed}/{state.progress.total}
+                </span>
+              </div>
+              <Progress aria-label="进程测速进度" value={progressValue} color="primary" />
+            </div>
+          )}
+          {state.testing && testingProcessSelectionKey !== selectedProcessSelectionKey && (
+            <div className="rounded-xl bg-warning/10 px-3 py-2 text-sm text-warning-700 dark:text-warning-400">
+              后台仍在测试：{processSelectionLabel(testingCatalogs)}。当前选择为
+              {processSelectionLabel(selectedCatalogs)}，不会改变正在执行的目标。
+            </div>
+          )}
+          {state.error && !state.testing && (
+            <div className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
+              {state.error}
+            </div>
+          )}
+        </TestPageControls>
 
         <section className="border-b border-divider p-3">
           <div className="flex flex-col gap-3">
@@ -834,42 +885,24 @@ const ProcessTest: React.FC = () => {
               <span className="text-xs text-foreground-500">悬停指标可查看各域名和逐轮结果</span>
             </div>
 
-            <div className="overflow-x-auto">
-              <div className="min-w-190">
-                <div className="grid grid-cols-[minmax(180px,1.8fr)_repeat(5,minmax(86px,1fr))_82px_72px] gap-2 border-b border-divider px-4 py-2 text-xs text-foreground-500">
-                  {sortHeader('name', '节点')}
-                  {sortHeader('score', '综合耗时')}
-                  {sortHeader('successRate', '成功率')}
-                  {sortHeader('medianMs', '中位耗时')}
-                  {sortHeader('p95Ms', 'P95')}
-                  {sortHeader('failedTargets', '失败目标')}
-                  {sortHeader('grade', '评级')}
-                  <span className="flex h-6 items-center">操作</span>
-                </div>
+            <TestResultTableViewport minWidthClassName="min-w-190">
+              <TestResultTableHeader columnsClassName={PROCESS_TABLE_COLUMNS}>
+                {sortHeader('name', '节点')}
+                {sortHeader('score', '综合耗时')}
+                {sortHeader('successRate', '成功率')}
+                {sortHeader('medianMs', '中位耗时')}
+                {sortHeader('p95Ms', 'P95')}
+                {sortHeader('failedTargets', '失败目标')}
+                {sortHeader('grade', '评级')}
+                <TestResultActionHeader />
+              </TestResultTableHeader>
 
-                {rows.length === 0 ? (
-                  <div className="flex min-h-40 items-center justify-center text-sm text-foreground-400">
-                    当前代理组没有可测试节点
-                  </div>
-                ) : (
-                  rows.map((proxy) => (
-                    <ProcessTestRow
-                      key={proxy.name}
-                      proxy={proxy}
-                      result={visibleResults[proxy.name]}
-                      selected={selectedNodes.has(proxy.name)}
-                      testing={state.testing}
-                      canSwitch={Boolean(switchGroup?.all.some((item) => item.name === proxy.name))}
-                      isCurrent={switchGroup?.now === proxy.name}
-                      isSwitching={switchingProxy === proxy.name}
-                      switchBusy={Boolean(switchingProxy)}
-                      onSelectedChange={changeNodeSelection}
-                      onSwitch={switchProxy}
-                    />
-                  ))
-                )}
-              </div>
-            </div>
+              {rows.length === 0 ? (
+                <TestResultEmptyState />
+              ) : (
+                <TestResultVirtualRows items={renderedRows} />
+              )}
+            </TestResultTableViewport>
           </div>
         </section>
       </div>

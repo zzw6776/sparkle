@@ -9,6 +9,10 @@ function ipcErrorWrapper(response: any): any {
   }
 }
 
+export async function writeClipboardText(text: string): Promise<void> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('writeClipboardText', text))
+}
+
 export async function mihomoVersion(): Promise<ControllerVersion> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoVersion'))
 }

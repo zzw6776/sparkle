@@ -22,6 +22,13 @@ interface DelayTestStoreSnapshot {
   groups: ReadonlySet<string>
 }
 
+interface ActiveGroupDelayRun {
+  version: number
+  run: DelayTestRun
+  cancelled: Promise<void>
+  cancel: () => void
+}
+
 export type DelayTestRun = Record<string, number>
 
 let snapshot: DelayTestStoreSnapshot = {
@@ -34,6 +41,7 @@ let snapshot: DelayTestStoreSnapshot = {
 const listeners = new Set<() => void>()
 const proxyRunVersions = new Map<string, number>()
 const groupRunVersions = new Map<string, number>()
+const activeGroupRuns = new Map<string, ActiveGroupDelayRun>()
 let nextRunVersion = 0
 
 function updateSnapshot(patch: Partial<DelayTestStoreSnapshot>): void {
@@ -97,6 +105,8 @@ export function releaseDelayTestResults(run: DelayTestRun): void {
 }
 
 function resetDelayTestStore(): void {
+  activeGroupRuns.forEach((active) => active.cancel())
+  activeGroupRuns.clear()
   proxyRunVersions.clear()
   groupRunVersions.clear()
   updateSnapshot({
@@ -105,6 +115,26 @@ function resetDelayTestStore(): void {
     testing: new Set(),
     groups: new Set()
   })
+}
+
+export function stopGroupDelayTest(group: string): boolean {
+  const active = activeGroupRuns.get(group)
+  if (!active) return false
+
+  activeGroupRuns.delete(group)
+  groupRunVersions.delete(group)
+  active.cancel()
+
+  const testing = new Set(snapshot.testing)
+  Object.entries(active.run).forEach(([proxy, version]) => {
+    if (proxyRunVersions.get(proxy) !== version) return
+    proxyRunVersions.delete(proxy)
+    testing.delete(proxy)
+  })
+  const groups = new Set(snapshot.groups)
+  groups.delete(group)
+  updateSnapshot({ testing, groups })
+  return true
 }
 
 const unsubscribeCoreStarted = window.electron.ipcRenderer.on('core-started', resetDelayTestStore)
@@ -148,43 +178,70 @@ export async function runGroupDelayTest(options: GroupDelayTestOptions): Promise
   const groups = new Set(snapshot.groups)
   groups.add(group)
   const run = clearDelays(proxies)
+  let cancelRun = (): void => {}
+  const cancelled = new Promise<void>((resolve) => {
+    cancelRun = resolve
+  })
+  const active: ActiveGroupDelayRun = {
+    version: groupVersion,
+    run,
+    cancelled,
+    cancel: cancelRun
+  }
+  activeGroupRuns.set(group, active)
   updateSnapshot({ groups })
+  const isActive = (): boolean => groupRunVersions.get(group) === groupVersion
 
   try {
-    if (useGroupApi) {
-      try {
-        const results = await mihomoGroupDelay(group, url)
-        proxies.forEach(({ name }) => {
-          const delay = results[name] ?? 0
-          finishProxy(name, delay, run[name])
-          onResult?.(name, delay)
-        })
-      } catch {
-        proxies.forEach(({ name }) => {
-          finishProxy(name, 0, run[name])
-          onResult?.(name, 0)
-        })
-      }
-    } else {
-      await runDelayTestsWithConcurrency(proxies, concurrency, async ({ name, provider }) => {
+    const execute = async (): Promise<void> => {
+      if (useGroupApi) {
         try {
-          const result = await mihomoProxyDelay(name, url, provider)
-          const delay = result.delay ?? 0
-          finishProxy(name, delay, run[name])
-          onResult?.(name, delay)
+          const results = await mihomoGroupDelay(group, url)
+          if (!isActive()) return
+          proxies.forEach(({ name }) => {
+            const delay = results[name] ?? 0
+            finishProxy(name, delay, run[name])
+            onResult?.(name, delay)
+          })
         } catch {
-          finishProxy(name, 0, run[name])
-          onResult?.(name, 0)
+          if (!isActive()) return
+          proxies.forEach(({ name }) => {
+            finishProxy(name, 0, run[name])
+            onResult?.(name, 0)
+          })
         }
-      })
+        return
+      }
+
+      await runDelayTestsWithConcurrency(
+        proxies,
+        concurrency,
+        async ({ name, provider }) => {
+          try {
+            const result = await mihomoProxyDelay(name, url, provider)
+            if (!isActive()) return
+            const delay = result.delay ?? 0
+            finishProxy(name, delay, run[name])
+            onResult?.(name, delay)
+          } catch {
+            if (!isActive()) return
+            finishProxy(name, 0, run[name])
+            onResult?.(name, 0)
+          }
+        },
+        () => !isActive()
+      )
     }
+
+    await Promise.race([execute(), cancelled])
   } finally {
-    if (groupRunVersions.get(group) === groupVersion) {
+    if (isActive()) {
       groupRunVersions.delete(group)
       const nextGroups = new Set(snapshot.groups)
       nextGroups.delete(group)
       updateSnapshot({ groups: nextGroups })
     }
+    if (activeGroupRuns.get(group) === active) activeGroupRuns.delete(group)
   }
   return run
 }

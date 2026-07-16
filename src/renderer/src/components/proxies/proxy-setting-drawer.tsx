@@ -4,6 +4,7 @@ import SettingItem from '../base/base-setting-item'
 import { SettingTabs, settingItemProps } from '../base/base-controls'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
 import debounce from '@renderer/utils/debounce'
+import { resolveEffectiveSpeedTestConnections } from '@renderer/utils/speed-test-config'
 import {
   DEFAULT_DELAY_TEST_CONCURRENCY,
   MAX_DELAY_TEST_CONCURRENCY,
@@ -43,6 +44,11 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
     speedTestConnections = 4,
     rememberProxyGroupOpenState = false
   } = appConfig || {}
+  const effectiveSpeedTestConnections = resolveEffectiveSpeedTestConnections(
+    speedTestSource,
+    speedTestMaxBytes,
+    speedTestConnections
+  )
 
   const [url, setUrl] = useState(delayTestUrl ?? '')
   const [downloadUrl, setDownloadUrl] = useState(speedTestUrl ?? '')
@@ -334,7 +340,11 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                   <InputGroup.Suffix>MB</InputGroup.Suffix>
                 </InputGroup>
               </SettingItem>
-              <SettingItem title="单节点下载连接数" {...settingItemProps} divider>
+              <SettingItem
+                title={`单节点下载连接数（配置 ${speedTestConnections} / 实际 ${effectiveSpeedTestConnections}）`}
+                {...settingItemProps}
+                divider
+              >
                 <InputGroup data-setting-input="number" variant="secondary">
                   <InputGroup.Input
                     aria-label="单节点下载连接数"

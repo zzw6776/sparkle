@@ -24,6 +24,17 @@ let connections =
   readTestHistory<ControllerConnectionDetail[]>(PROCESS_CONNECTION_HISTORY_KEY) || []
 let selectedProcessKey: string | undefined
 let persistTimer: number | undefined
+let catalogBuildTimer: number | undefined
+let catalogCache: ProcessTestTargetCatalog[] | undefined
+
+function scheduleCatalogBuild(): void {
+  catalogCache = undefined
+  if (catalogBuildTimer !== undefined) window.clearTimeout(catalogBuildTimer)
+  catalogBuildTimer = window.setTimeout(() => {
+    catalogBuildTimer = undefined
+    catalogCache = buildProcessTestCatalog()
+  }, 0)
+}
 
 function schedulePersistConnections(): void {
   if (persistTimer !== undefined) window.clearTimeout(persistTimer)
@@ -45,6 +56,7 @@ export function processTestKey(
 
 export function updateProcessTestConnections(nextConnections: ControllerConnectionDetail[]): void {
   connections = nextConnections
+  scheduleCatalogBuild()
   schedulePersistConnections()
 }
 
@@ -68,6 +80,7 @@ export function updateActiveProcessTestConnections(
     isActive: true
   }))
   connections = [...retained, ...normalizedActive].slice(-(normalizedActive.length + 200))
+  scheduleCatalogBuild()
   schedulePersistConnections()
 }
 
@@ -130,7 +143,7 @@ function parseTarget(
   return { host, port }
 }
 
-export function getProcessTestCatalog(): ProcessTestTargetCatalog[] {
+function buildProcessTestCatalog(): ProcessTestTargetCatalog[] {
   const catalogs = new Map<
     string,
     ProcessTestTargetCatalog & { domainMap: Map<string, ProcessTestDomainTarget> }
@@ -191,9 +204,21 @@ export function getProcessTestCatalog(): ProcessTestTargetCatalog[] {
     })
 }
 
+export function getProcessTestCatalog(): ProcessTestTargetCatalog[] {
+  if (!catalogCache) {
+    if (catalogBuildTimer !== undefined) window.clearTimeout(catalogBuildTimer)
+    catalogBuildTimer = undefined
+    catalogCache = buildProcessTestCatalog()
+  }
+  return catalogCache
+}
+
+scheduleCatalogBuild()
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     if (persistTimer !== undefined) window.clearTimeout(persistTimer)
+    if (catalogBuildTimer !== undefined) window.clearTimeout(catalogBuildTimer)
     writeTestHistory(PROCESS_CONNECTION_HISTORY_KEY, connections)
   })
 }

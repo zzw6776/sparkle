@@ -6,10 +6,23 @@ import {
   Chip,
   Progress,
   Select,
-  SelectItem,
-  Tooltip
+  SelectItem
 } from '@heroui/react'
 import BasePage from '@renderer/components/base/base-page'
+import {
+  TestResultActionHeader,
+  TestResultEmptyState,
+  TestResultNodeCell,
+  TestPageControlRow,
+  TestPageControls,
+  TestResultSortHeader,
+  TestResultSwitchAction,
+  TestResultTableHeader,
+  TestResultTableRow,
+  TestResultTableViewport,
+  TestResultTooltip,
+  TestResultVirtualRows
+} from '@renderer/components/speed-test/test-result-table'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
 import { useGroups } from '@renderer/hooks/use-groups'
 import {
@@ -29,17 +42,19 @@ import { mihomoChangeProxy, mihomoCloseConnections } from '@renderer/utils/ipc'
 import { notify } from '@renderer/utils/notification'
 import { isTestableProxy } from '@renderer/utils/testable-proxy'
 import { formatTestHistoryTime } from '@renderer/utils/test-history'
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { IoIosArrowBack } from 'react-icons/io'
+import { copyText } from '@renderer/utils/clipboard'
 import {
-  MdArrowDownward,
-  MdArrowUpward,
-  MdCheckCircle,
-  MdContentCopy,
-  MdErrorOutline,
-  MdStop,
-  MdUnfoldMore
-} from 'react-icons/md'
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
+import { IoIosArrowBack } from 'react-icons/io'
+import { MdCheckCircle, MdContentCopy, MdErrorOutline, MdStop } from 'react-icons/md'
+import { Virtuoso } from 'react-virtuoso'
 import { useNavigate } from 'react-router-dom'
 
 type SortKey =
@@ -75,6 +90,10 @@ const actualStageText: Record<CodexActualTestStage, string> = {
 const MIN_CONCURRENCY = 1
 const MAX_CONCURRENCY = 16
 const FOLLOW_TEST_GROUP = '__FOLLOW_TEST_GROUP__'
+const ACTUAL_TABLE_COLUMNS = 'grid-cols-[minmax(180px,1.7fr)_repeat(7,minmax(86px,1fr))_82px_72px]'
+const LINK_TABLE_COLUMNS = 'grid-cols-[minmax(160px,1.7fr)_repeat(6,minmax(74px,1fr))_82px_72px]'
+const EMPTY_LINK_RESULTS: Record<string, CodexTestResult> = {}
+const EMPTY_ACTUAL_RESULTS: Record<string, CodexActualTestResult> = {}
 
 function normalizeConcurrency(value?: number): number {
   if (!Number.isFinite(value)) return 6
@@ -126,8 +145,9 @@ function metricResult(
   const failurePenalty = (1 - result.successRate) * 2000
   const roundResults = result.roundResults ?? []
   return (
-    <Tooltip
+    <TestResultTooltip
       placement="top"
+      closeDelay={0}
       content={
         <div className="min-w-52 space-y-1 px-1 py-0.5 text-xs">
           <div className="font-medium">
@@ -161,7 +181,7 @@ function metricResult(
       }
     >
       <span className="inline-flex">{metric(value)}</span>
-    </Tooltip>
+    </TestResultTooltip>
   )
 }
 
@@ -205,8 +225,9 @@ function actualMetricResult(
 ): React.ReactNode {
   if (!result) return <span>—</span>
   return (
-    <Tooltip
+    <TestResultTooltip
       placement="top"
+      closeDelay={0}
       content={
         <div className="min-w-64 space-y-1 px-1 py-0.5 text-xs">
           <div className="font-medium">
@@ -239,7 +260,7 @@ function actualMetricResult(
       }
     >
       <span className="inline-flex">{metric(value)}</span>
-    </Tooltip>
+    </TestResultTooltip>
   )
 }
 
@@ -279,6 +300,321 @@ function parseTopCount(value: string, max: number): number | undefined {
   return Number.isSafeInteger(parsed) && parsed <= max ? parsed : undefined
 }
 
+interface GradeCellProps {
+  grade?: ReturnType<typeof resultGrade>
+}
+
+/* eslint-disable react/prop-types */
+const GradeCell = memo<GradeCellProps>(({ grade }) =>
+  grade ? (
+    <Chip
+      size="sm"
+      color={grade.color}
+      variant="flat"
+      startContent={grade.color === 'danger' ? <MdErrorOutline /> : <MdCheckCircle />}
+    >
+      {grade.label}
+    </Chip>
+  ) : (
+    <span className="text-xs text-foreground-400">未测试</span>
+  )
+)
+
+GradeCell.displayName = 'GradeCell'
+
+interface CodexLinkRowProps {
+  proxyName: string
+  result?: CodexTestResult
+  selected: boolean
+  disabled: boolean
+  groupName?: string
+  canSwitch: boolean
+  isCurrent: boolean
+  isLoading: boolean
+  switchBusy: boolean
+  onSelectedChange: (proxyName: string, selected: boolean) => void
+  onSwitch: (proxyName: string) => void
+}
+
+const CodexLinkRow = memo<CodexLinkRowProps>(
+  ({
+    proxyName,
+    result,
+    selected,
+    disabled,
+    groupName,
+    canSwitch,
+    isCurrent,
+    isLoading,
+    switchBusy,
+    onSelectedChange,
+    onSwitch
+  }) => {
+    const grade = result ? resultGrade(result) : undefined
+    return (
+      <TestResultTableRow columnsClassName={LINK_TABLE_COLUMNS}>
+        <TestResultNodeCell
+          name={proxyName}
+          selected={selected}
+          disabled={disabled}
+          onSelectedChange={(checked) => onSelectedChange(proxyName, checked)}
+        />
+        {metricResult(result, result?.score, 'combinedMs')}
+        {metricResult(result, result?.tunnelMs, 'tunnelMs')}
+        {metricResult(result, result?.tlsMs, 'tlsMs')}
+        {metricResult(result, result?.httpsTtfbMs, 'httpsTtfbMs')}
+        {metricResult(result, result?.websocketMs, 'websocketMs')}
+        {result ? (
+          <TestResultTooltip
+            placement="top"
+            content={
+              <div className="space-y-1 px-1 py-0.5 text-xs">
+                <div>
+                  已完成：{result.completedRounds}/{result.rounds} 轮
+                </div>
+                <div>成功：{result.succeeded} 轮</div>
+                <div>失败：{result.failed} 轮</div>
+                <div>成功率：{Math.round(result.successRate * 100)}%</div>
+              </div>
+            }
+          >
+            <span className="inline-flex">{Math.round(result.successRate * 100)}%</span>
+          </TestResultTooltip>
+        ) : (
+          <span>—</span>
+        )}
+        <GradeCell grade={grade} />
+        <TestResultSwitchAction
+          groupName={groupName}
+          canSwitch={canSwitch}
+          isCurrent={isCurrent}
+          isLoading={isLoading}
+          switchBusy={switchBusy}
+          onPress={() => onSwitch(proxyName)}
+        />
+      </TestResultTableRow>
+    )
+  }
+)
+
+CodexLinkRow.displayName = 'CodexLinkRow'
+
+interface CodexActualRowProps extends Omit<CodexLinkRowProps, 'result'> {
+  linkResult?: CodexTestResult
+  result?: CodexActualTestResult
+}
+
+const CodexActualRow = memo<CodexActualRowProps>(
+  ({
+    proxyName,
+    linkResult,
+    result,
+    selected,
+    disabled,
+    groupName,
+    canSwitch,
+    isCurrent,
+    isLoading,
+    switchBusy,
+    onSelectedChange,
+    onSwitch
+  }) => {
+    const grade = result ? actualResultGrade(result) : undefined
+    return (
+      <TestResultTableRow columnsClassName={ACTUAL_TABLE_COLUMNS}>
+        <TestResultNodeCell
+          name={proxyName}
+          selected={selected}
+          disabled={disabled}
+          onSelectedChange={(checked) => onSelectedChange(proxyName, checked)}
+        />
+        {metricResult(linkResult, linkResult?.score, 'combinedMs')}
+        {actualMetricResult(result, result?.score, 'score', '综合耗时')}
+        {actualMetricResult(result, result?.firstTokenMs, 'firstTokenMs', '首字耗时')}
+        {actualMetricResult(result, result?.totalMs, 'totalMs', '完整返回')}
+        {result ? (
+          <TestResultTooltip
+            placement="top"
+            content={
+              <div className="space-y-1 px-1 py-0.5 text-xs">
+                <div>模型：{result.model || '未知'}</div>
+                <div>
+                  成功：{result.succeeded}/{result.completedRounds} 轮
+                </div>
+                {result.roundResults.map((round) => (
+                  <div key={round.round} className="flex max-w-96 gap-3">
+                    <span>第 {round.round} 轮</span>
+                    <span className={round.success ? '' : 'text-danger'}>
+                      {round.success ? '成功' : round.error || '失败'}
+                      {round.model ? ` · ${round.model}` : ''}
+                    </span>
+                  </div>
+                ))}
+                {result.error && <div className="max-w-80 text-danger">{result.error}</div>}
+              </div>
+            }
+          >
+            <span className="inline-flex">{Math.round(result.successRate * 100)}%</span>
+          </TestResultTooltip>
+        ) : (
+          <span>—</span>
+        )}
+        {result ? (
+          <TestResultTooltip
+            placement="top"
+            content={
+              <div className="space-y-1 px-1 py-0.5 text-xs">
+                <div>只有经过对应隐藏监听和隐藏代理组才算验证成功</div>
+                {result.roundResults.map((round) => (
+                  <div key={round.round} className="border-t border-divider pt-1">
+                    <div className="flex justify-between gap-4">
+                      <span>第 {round.round} 轮</span>
+                      <span className={round.routeVerified ? 'text-success' : 'text-danger'}>
+                        {round.routeVerified ? '已验证' : '未验证'}
+                      </span>
+                    </div>
+                    {round.routes?.map((route, routeIndex) => (
+                      <div
+                        key={`${route.inboundName}-${route.host}-${routeIndex}`}
+                        className="mt-1 max-w-96 space-y-0.5 text-foreground-500"
+                      >
+                        <div>
+                          连接 {routeIndex + 1} · 入站：{route.inboundName || '未报告'}
+                        </div>
+                        <div>域名：{route.host || '未报告'}</div>
+                        <div>DNS：{route.dnsMode || '未报告'}</div>
+                        <div>
+                          远端：{route.remoteDestination || route.destinationIP || '未报告'}
+                        </div>
+                        <div className="break-all">链路：{route.chains.join(' → ')}</div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            }
+          >
+            <span
+              className={`inline-flex ${result.routeVerifiedRate === 1 ? 'text-success' : 'text-danger'}`}
+            >
+              {Math.round(result.routeVerifiedRate * 100)}%
+            </span>
+          </TestResultTooltip>
+        ) : (
+          <span>—</span>
+        )}
+        {result ? (
+          <TestResultTooltip
+            placement="top"
+            content={
+              <div className="space-y-1 px-1 py-0.5 text-xs">
+                <div>总计：{result.tokenUsage.totalTokens}</div>
+                <div>输入：{result.tokenUsage.inputTokens}</div>
+                <div>缓存输入：{result.tokenUsage.cachedInputTokens}</div>
+                <div>输出：{result.tokenUsage.outputTokens}</div>
+                <div>推理输出：{result.tokenUsage.reasoningOutputTokens}</div>
+                <div className="border-t border-divider pt-1">
+                  {result.roundResults.map((round) => (
+                    <div key={round.round} className="flex justify-between gap-4">
+                      <span>第 {round.round} 轮</span>
+                      <span>{round.tokenUsage?.totalTokens ?? '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            }
+          >
+            <span className="inline-flex">{result.tokenUsage.totalTokens}</span>
+          </TestResultTooltip>
+        ) : (
+          <span>—</span>
+        )}
+        <GradeCell grade={grade} />
+        <TestResultSwitchAction
+          groupName={groupName}
+          canSwitch={canSwitch}
+          isCurrent={isCurrent}
+          isLoading={isLoading}
+          switchBusy={switchBusy}
+          onPress={() => onSwitch(proxyName)}
+        />
+      </TestResultTableRow>
+    )
+  }
+)
+
+CodexActualRow.displayName = 'CodexActualRow'
+
+const ActualLogRow = memo<{ entry: CodexActualTestLogEntry }>(({ entry }) => (
+  <div
+    className={`grid grid-cols-[70px_minmax(130px,240px)_1fr] gap-2 py-1 ${
+      entry.level === 'error'
+        ? 'text-danger'
+        : entry.level === 'success'
+          ? 'text-success'
+          : 'text-foreground-600'
+    }`}
+  >
+    <span className="tabular-nums text-foreground-400">{logTime(entry.timestamp)}</span>
+    <span className="flag-emoji truncate" title={entry.proxy}>
+      {entry.proxy ? `${entry.proxy}${entry.round ? ` · 第 ${entry.round} 轮` : ''}` : '测试任务'}
+    </span>
+    <span className="break-words">{entry.message}</span>
+  </div>
+))
+
+ActualLogRow.displayName = 'ActualLogRow'
+
+interface ActualLogPanelProps {
+  logs: CodexActualTestLogEntry[]
+  expanded: boolean
+  onToggle: () => void
+  onCopy: () => void
+}
+
+const ActualLogPanel = memo<ActualLogPanelProps>(({ logs, expanded, onToggle, onCopy }) => {
+  if (logs.length === 0) return null
+  return (
+    <div className="overflow-hidden rounded-xl border border-divider bg-content1">
+      <div className="flex items-center hover:bg-content2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center justify-between px-3 py-2 text-left text-sm"
+          onClick={onToggle}
+        >
+          <span className="font-medium">实时测试日志</span>
+          <span className="text-xs text-foreground-500">
+            {logs.length} 条 · {expanded ? '收起' : '展开'}
+          </span>
+        </button>
+        <Button
+          size="sm"
+          variant="flat"
+          className="mr-2 h-7 min-w-0 shrink-0 px-2"
+          startContent={<MdContentCopy />}
+          onPress={onCopy}
+        >
+          复制全部
+        </Button>
+      </div>
+      {expanded && (
+        <Virtuoso
+          className="max-h-56 cursor-text select-text overflow-y-auto border-t border-divider bg-content2/40 px-3 py-2 font-mono text-xs"
+          style={{ height: Math.min(224, Math.max(32, logs.length * 28)) }}
+          data={logs}
+          computeItemKey={(_index, entry) => entry.id}
+          initialTopMostItemIndex={logs.length - 1}
+          followOutput="auto"
+          itemContent={(_index, entry) => <ActualLogRow entry={entry} />}
+        />
+      )}
+    </div>
+  )
+})
+
+ActualLogPanel.displayName = 'ActualLogPanel'
+/* eslint-enable react/prop-types */
+
 const CodexTest: React.FC = () => {
   const navigate = useNavigate()
   const { groups = [], mutate } = useGroups()
@@ -305,12 +641,13 @@ const CodexTest: React.FC = () => {
     normalizeConcurrency(appConfig?.codexTestConcurrency).toString()
   )
   const [actualConcurrencyInput, setActualConcurrencyInput] = useState('2')
+  const concurrencyRef = useRef<HTMLInputElement>(null)
+  const actualTopRef = useRef<HTMLInputElement>(null)
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [actualSortKey, setActualSortKey] = useState<ActualSortKey>('score')
   const [actualSortDirection, setActualSortDirection] = useState<SortDirection>('asc')
   const [actualLogExpanded, setActualLogExpanded] = useState(true)
-  const actualLogRef = useRef<HTMLDivElement>(null)
   const [switchingProxy, setSwitchingProxy] = useState<string>()
   const { autoCloseConnection = true, closeMode = 'all' } = appConfig || {}
   const group = groups.find((item) => item.name === groupName) || groups[0]
@@ -318,21 +655,31 @@ const CodexTest: React.FC = () => {
     switchGroupName === FOLLOW_TEST_GROUP
       ? group
       : groups.find((item) => item.name === switchGroupName) || group
+  const switchableProxyNames = useMemo(
+    () => new Set(switchGroup?.all.map((item) => item.name) || []),
+    [switchGroup]
+  )
   const proxies = useMemo(() => {
     const unique = new Map<string, ControllerProxiesDetail>()
     group?.all.filter(isTestableProxy).forEach((proxy) => unique.set(proxy.name, proxy))
     return [...unique.values()]
   }, [group])
-  const proxyKey = proxies.map((proxy) => proxy.name).join('\u0000')
-  const visibleResults = state.groupName && group?.name !== state.groupName ? {} : state.results
+  const proxyKey = useMemo(() => proxies.map((proxy) => proxy.name).join('\u0000'), [proxies])
+  const visibleResults =
+    state.groupName && group?.name !== state.groupName ? EMPTY_LINK_RESULTS : state.results
   const visibleActualResults =
-    actualState.groupName && group?.name !== actualState.groupName ? {} : actualState.results
+    actualState.groupName && group?.name !== actualState.groupName
+      ? EMPTY_ACTUAL_RESULTS
+      : actualState.results
   const anyTesting = state.testing || actualState.testing
   const actualTopLimit = parseTopCount(actualTopCount, proxies.length)
   const concurrencyMax = mode === 'actual' ? 4 : MAX_CONCURRENCY
   const currentConcurrencyInput = mode === 'actual' ? actualConcurrencyInput : concurrencyInput
   const currentConcurrency = parseTopCount(currentConcurrencyInput, concurrencyMax)
-  const concurrencyOptions = mode === 'actual' ? [1, 2, 3, 4] : [1, 2, 4, 6, 8, 12, 16]
+  const concurrencyOptions = useMemo(
+    () => (mode === 'actual' ? [1, 2, 3, 4] : [1, 2, 4, 6, 8, 12, 16]),
+    [mode]
+  )
   const actualTopOptions = useMemo(
     () =>
       [...new Set([1, 3, 5, 10, 20, proxies.length])].filter(
@@ -340,9 +687,13 @@ const CodexTest: React.FC = () => {
       ),
     [proxies.length]
   )
-  const linkScoreKey = proxies
-    .map((proxy) => `${proxy.name}:${visibleResults[proxy.name]?.score ?? ''}`)
-    .join('\u0000')
+  const linkScoreKey = useMemo(
+    () =>
+      proxies
+        .map((proxy) => `${proxy.name}:${visibleResults[proxy.name]?.score ?? ''}`)
+        .join('\u0000'),
+    [proxies, visibleResults]
+  )
 
   useEffect(() => {
     if (!groupName && groups[0]) {
@@ -363,13 +714,25 @@ const CodexTest: React.FC = () => {
   }, [groups, switchGroupName])
 
   useEffect(() => {
-    setSelected(new Set(proxies.map((proxy) => proxy.name)))
+    const nextNames = proxies.map((proxy) => proxy.name)
+    setSelected((current) => {
+      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
+        return current
+      }
+      return new Set(nextNames)
+    })
   }, [group?.name, proxyKey])
 
   useEffect(() => {
     if (actualTopLimit === undefined || actualState.testing) return
     const ranked = fastestLinkProxies(proxies, visibleResults, actualTopLimit)
-    setActualSelected(new Set(ranked.map((proxy) => proxy.name)))
+    const nextNames = ranked.map((proxy) => proxy.name)
+    setActualSelected((current) => {
+      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
+        return current
+      }
+      return new Set(nextNames)
+    })
   }, [actualState.testing, actualTopLimit, linkScoreKey, proxyKey])
 
   useEffect(() => {
@@ -377,12 +740,6 @@ const CodexTest: React.FC = () => {
       setConcurrencyInput(normalizeConcurrency(appConfig?.codexTestConcurrency).toString())
     }
   }, [appConfig?.codexTestConcurrency, state.testing])
-
-  useEffect(() => {
-    if (!actualLogExpanded) return
-    const container = actualLogRef.current
-    if (container) container.scrollTop = container.scrollHeight
-  }, [actualLogExpanded, actualState.logs.length])
 
   const rows = useMemo(() => {
     return [...proxies].sort((left, right) => {
@@ -445,9 +802,10 @@ const CodexTest: React.FC = () => {
   ])
   const activeSelected = mode === 'actual' ? actualSelected : selected
   const activeRows = mode === 'actual' ? actualRows : rows
-  const selectedNames = proxies
-    .filter((proxy) => activeSelected.has(proxy.name))
-    .map((proxy) => proxy.name)
+  const selectedNames = useMemo(
+    () => proxies.filter((proxy) => activeSelected.has(proxy.name)).map((proxy) => proxy.name),
+    [activeSelected, proxies]
+  )
   const allSelected = proxies.length > 0 && selectedNames.length === proxies.length
   const activeProgress = mode === 'actual' ? actualState.progress : state.progress
   const progressValue = activeProgress
@@ -460,97 +818,169 @@ const CodexTest: React.FC = () => {
   const currentHistoryGroup = mode === 'actual' ? actualState.groupName : state.groupName
   const currentError = mode === 'actual' ? actualState.error : state.error
 
-  const toggleSort = (key: SortKey): void => {
-    if (key === sortKey) {
-      setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
-      return
-    }
-    setSortKey(key)
-    setSortDirection(key === 'successRate' ? 'desc' : 'asc')
-  }
+  const toggleSort = useCallback(
+    (key: SortKey): void => {
+      if (key === sortKey) {
+        setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
+        return
+      }
+      setSortKey(key)
+      setSortDirection(key === 'successRate' ? 'desc' : 'asc')
+    },
+    [sortKey]
+  )
 
   const sortHeader = (key: SortKey, label: string): React.ReactNode => (
-    <Button
-      size="sm"
-      variant="light"
-      className="h-6 min-w-0 justify-start gap-0.5 px-0 text-xs text-foreground-500"
-      endContent={
-        key !== sortKey ? (
-          <MdUnfoldMore className="shrink-0 text-sm opacity-50" />
-        ) : sortDirection === 'asc' ? (
-          <MdArrowUpward className="shrink-0 text-sm" />
-        ) : (
-          <MdArrowDownward className="shrink-0 text-sm" />
-        )
-      }
+    <TestResultSortHeader
+      label={label}
+      active={key === sortKey}
+      direction={sortDirection}
       onPress={() => toggleSort(key)}
-    >
-      <span className="truncate">{label}</span>
-    </Button>
+    />
   )
 
-  const toggleActualSort = (key: ActualSortKey): void => {
-    if (key === actualSortKey) {
-      setActualSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
-      return
-    }
-    setActualSortKey(key)
-    setActualSortDirection(
-      key === 'successRate' || key === 'routeVerifiedRate' || key === 'tokens' ? 'desc' : 'asc'
-    )
-  }
+  const toggleActualSort = useCallback(
+    (key: ActualSortKey): void => {
+      if (key === actualSortKey) {
+        setActualSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
+        return
+      }
+      setActualSortKey(key)
+      setActualSortDirection(
+        key === 'successRate' || key === 'routeVerifiedRate' || key === 'tokens' ? 'desc' : 'asc'
+      )
+    },
+    [actualSortKey]
+  )
 
   const actualSortHeader = (key: ActualSortKey, label: string): React.ReactNode => (
-    <Button
-      size="sm"
-      variant="light"
-      className="h-6 min-w-0 justify-start gap-0.5 px-0 text-xs text-foreground-500"
-      endContent={
-        key !== actualSortKey ? (
-          <MdUnfoldMore className="shrink-0 text-sm opacity-50" />
-        ) : actualSortDirection === 'asc' ? (
-          <MdArrowUpward className="shrink-0 text-sm" />
-        ) : (
-          <MdArrowDownward className="shrink-0 text-sm" />
-        )
-      }
+    <TestResultSortHeader
+      label={label}
+      active={key === actualSortKey}
+      direction={actualSortDirection}
       onPress={() => toggleActualSort(key)}
-    >
-      <span className="truncate">{label}</span>
-    </Button>
+    />
   )
 
-  const switchProxy = async (proxy: string): Promise<void> => {
-    if (!switchGroup || switchingProxy || switchGroup.now === proxy) return
-    if (!switchGroup.all.some((item) => item.name === proxy)) {
-      notify(`代理组 ${switchGroup.name} 不包含节点 ${proxy}`, { variant: 'warning' })
-      return
-    }
-    setSwitchingProxy(proxy)
-    try {
-      await mihomoChangeProxy(switchGroup.name, proxy)
-      if (anyTesting) {
-        await mihomoCloseConnections(switchGroup.name)
-      } else if (autoCloseConnection) {
-        await mihomoCloseConnections(closeMode === 'group' ? switchGroup.name : undefined)
+  const switchProxy = useCallback(
+    async (proxy: string): Promise<void> => {
+      if (!switchGroup || switchingProxy || switchGroup.now === proxy) return
+      if (!switchGroup.all.some((item) => item.name === proxy)) {
+        notify(`代理组 ${switchGroup.name} 不包含节点 ${proxy}`, { variant: 'warning' })
+        return
       }
-      await mutate()
-      notify(`已将 ${switchGroup.name} 切换到 ${proxy}`, { variant: 'success' })
-    } catch (error) {
-      notify(error, { variant: 'danger' })
-    } finally {
-      setSwitchingProxy(undefined)
-    }
-  }
+      setSwitchingProxy(proxy)
+      try {
+        await mihomoChangeProxy(switchGroup.name, proxy)
+        if (anyTesting) {
+          await mihomoCloseConnections(switchGroup.name)
+        } else if (autoCloseConnection) {
+          await mihomoCloseConnections(closeMode === 'group' ? switchGroup.name : undefined)
+        }
+        await mutate()
+        notify(`已将 ${switchGroup.name} 切换到 ${proxy}`, { variant: 'success' })
+      } catch (error) {
+        notify(error, { variant: 'danger' })
+      } finally {
+        setSwitchingProxy(undefined)
+      }
+    },
+    [autoCloseConnection, closeMode, mutate, switchGroup, switchingProxy, anyTesting]
+  )
 
-  const copyActualLogs = async (): Promise<void> => {
+  const copyActualLogs = useCallback(async (): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(actualLogsText(actualState.logs))
+      await copyText(actualLogsText(actualState.logs))
       notify(`已复制 ${actualState.logs.length} 条测试日志`, { variant: 'success' })
     } catch (error) {
       notify(`复制测试日志失败：${String(error)}`, { variant: 'danger' })
     }
-  }
+  }, [actualState.logs])
+
+  const changeLinkSelection = useCallback((proxyName: string, checked: boolean): void => {
+    setSelected((current) => {
+      const hasProxy = current.has(proxyName)
+      if (hasProxy === checked) return current
+      const next = new Set(current)
+      if (checked) next.add(proxyName)
+      else next.delete(proxyName)
+      return next
+    })
+  }, [])
+
+  const changeActualSelection = useCallback((proxyName: string, checked: boolean): void => {
+    setActualSelected((current) => {
+      const hasProxy = current.has(proxyName)
+      if (hasProxy === checked) return current
+      const next = new Set(current)
+      if (checked) next.add(proxyName)
+      else next.delete(proxyName)
+      return next
+    })
+  }, [])
+
+  const toggleActualLogs = useCallback(() => {
+    setActualLogExpanded((current) => !current)
+  }, [])
+
+  const changeMode = useCallback((nextMode: TestMode): void => {
+    setMode(nextMode)
+  }, [])
+
+  const renderedRows = useMemo(
+    () =>
+      mode === 'actual'
+        ? actualRows.map((proxy) => (
+            <CodexActualRow
+              key={proxy.name}
+              proxyName={proxy.name}
+              linkResult={visibleResults[proxy.name]}
+              result={visibleActualResults[proxy.name]}
+              selected={actualSelected.has(proxy.name)}
+              disabled={anyTesting}
+              groupName={switchGroup?.name}
+              canSwitch={switchableProxyNames.has(proxy.name)}
+              isCurrent={switchGroup?.now === proxy.name}
+              isLoading={switchingProxy === proxy.name}
+              switchBusy={Boolean(switchingProxy)}
+              onSelectedChange={changeActualSelection}
+              onSwitch={switchProxy}
+            />
+          ))
+        : rows.map((proxy) => (
+            <CodexLinkRow
+              key={proxy.name}
+              proxyName={proxy.name}
+              result={visibleResults[proxy.name]}
+              selected={selected.has(proxy.name)}
+              disabled={anyTesting}
+              groupName={switchGroup?.name}
+              canSwitch={switchableProxyNames.has(proxy.name)}
+              isCurrent={switchGroup?.now === proxy.name}
+              isLoading={switchingProxy === proxy.name}
+              switchBusy={Boolean(switchingProxy)}
+              onSelectedChange={changeLinkSelection}
+              onSwitch={switchProxy}
+            />
+          )),
+    [
+      actualRows,
+      actualSelected,
+      anyTesting,
+      changeActualSelection,
+      changeLinkSelection,
+      mode,
+      rows,
+      selected,
+      switchableProxyNames,
+      switchingProxy,
+      switchGroup?.name,
+      switchGroup?.now,
+      switchProxy,
+      visibleActualResults,
+      visibleResults
+    ]
+  )
 
   return (
     <BasePage
@@ -575,7 +1005,7 @@ const CodexTest: React.FC = () => {
               color={mode === 'link' ? 'primary' : 'default'}
               variant={mode === 'link' ? 'solid' : 'light'}
               className="min-w-28"
-              onPress={() => setMode('link')}
+              onPress={() => changeMode('link')}
             >
               链路测试{state.testing ? ' · 进行中' : ''}
             </Button>
@@ -584,287 +1014,245 @@ const CodexTest: React.FC = () => {
               color={mode === 'actual' ? 'primary' : 'default'}
               variant={mode === 'actual' ? 'solid' : 'light'}
               className="min-w-28"
-              onPress={() => setMode('actual')}
+              onPress={() => changeMode('actual')}
             >
               真实响应{actualState.testing ? ' · 进行中' : ''}
             </Button>
           </div>
         </section>
-        <section className="border-b border-divider p-3">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <Select
-                label="测试节点组"
-                size="sm"
-                className="min-w-52 flex-1"
-                classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                selectedKeys={group ? new Set([group.name]) : new Set()}
-                disallowEmptySelection
-                isDisabled={anyTesting || groups.length === 0}
-                onSelectionChange={(keys) => {
-                  const next = keys.currentKey
-                  if (next) setGroupName(String(next))
-                }}
-              >
-                {groups.map((item) => (
-                  <SelectItem key={item.name}>{item.name}</SelectItem>
-                ))}
-              </Select>
+        <TestPageControls>
+          <TestPageControlRow>
+            <Select
+              label="测试节点组"
+              size="sm"
+              className="min-w-52 flex-1"
+              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+              selectedKeys={group ? new Set([group.name]) : new Set()}
+              disallowEmptySelection
+              isDisabled={anyTesting || groups.length === 0}
+              onSelectionChange={(keys) => {
+                const next = keys.currentKey
+                if (next) setGroupName(String(next))
+              }}
+            >
+              {groups.map((item) => (
+                <SelectItem key={item.name}>{item.name}</SelectItem>
+              ))}
+            </Select>
 
-              <Select
-                label="切换目标组"
-                size="sm"
-                className="min-w-52 flex-1"
-                selectedKeys={new Set([switchGroupName])}
-                disallowEmptySelection
-                isDisabled={groups.length === 0}
-                onSelectionChange={(keys) => {
-                  const next = keys.currentKey
-                  if (next) setSwitchGroupName(String(next))
-                }}
-              >
-                {[
-                  { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
-                  ...groups.map((item) => ({ key: item.name, label: item.name }))
-                ].map((item) => (
-                  <SelectItem key={item.key}>{item.label}</SelectItem>
-                ))}
-              </Select>
+            <Select
+              label="切换目标组"
+              size="sm"
+              className="min-w-52 flex-1"
+              selectedKeys={new Set([switchGroupName])}
+              disallowEmptySelection
+              isDisabled={groups.length === 0}
+              onSelectionChange={(keys) => {
+                const next = keys.currentKey
+                if (next) setSwitchGroupName(String(next))
+              }}
+            >
+              {[
+                { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
+                ...groups.map((item) => ({ key: item.name, label: item.name }))
+              ].map((item) => (
+                <SelectItem key={item.key}>{item.label}</SelectItem>
+              ))}
+            </Select>
 
-              <div>
-                <div className="mb-1 text-xs text-foreground-500">测试轮数</div>
-                <div className="flex gap-1">
-                  {[1, 3, 5].map((value) => (
-                    <Button
-                      key={value}
-                      size="sm"
-                      className="min-w-16 data-[disabled=true]:opacity-100"
-                      color={currentRounds === value ? 'primary' : 'default'}
-                      variant={currentRounds === value ? 'solid' : 'flat'}
-                      isDisabled={anyTesting}
-                      onPress={() => {
-                        if (mode === 'actual') setActualRounds(value)
-                        else setRounds(value)
-                      }}
-                    >
-                      {value} 轮
-                    </Button>
-                  ))}
-                </div>
+            <div>
+              <div className="mb-1 text-xs text-foreground-500">测试轮数</div>
+              <div className="flex gap-1">
+                {[1, 3, 5].map((value) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    className="min-w-16 data-[disabled=true]:opacity-100"
+                    color={currentRounds === value ? 'primary' : 'default'}
+                    variant={currentRounds === value ? 'solid' : 'flat'}
+                    isDisabled={anyTesting}
+                    onPress={() => {
+                      if (mode === 'actual') setActualRounds(value)
+                      else setRounds(value)
+                    }}
+                  >
+                    {value} 轮
+                  </Button>
+                ))}
               </div>
+            </div>
 
+            <Autocomplete
+              ref={concurrencyRef}
+              label="并发数"
+              size="sm"
+              className="w-28"
+              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+              allowsCustomValue
+              isClearable={false}
+              inputValue={currentConcurrencyInput}
+              selectedKey={null}
+              isInvalid={!anyTesting && currentConcurrency === undefined}
+              errorMessage={
+                currentConcurrencyInput === ''
+                  ? '请输入并发数'
+                  : `请输入 ${MIN_CONCURRENCY}-${concurrencyMax} 的整数`
+              }
+              isDisabled={anyTesting}
+              onInputChange={(value) => {
+                if (mode === 'actual') {
+                  setActualConcurrencyInput(value)
+                } else {
+                  setConcurrencyInput(value)
+                }
+              }}
+              onSelectionChange={(key) => {
+                if (key === null) return
+                if (mode === 'actual') setActualConcurrencyInput(String(key))
+                else setConcurrencyInput(String(key))
+                concurrencyRef.current?.blur()
+              }}
+              onBlur={() => {
+                if (mode === 'link' && currentConcurrency !== undefined) {
+                  void patchAppConfig({ codexTestConcurrency: currentConcurrency })
+                }
+              }}
+            >
+              {concurrencyOptions.map((value) => (
+                <AutocompleteItem key={String(value)} textValue={String(value)}>
+                  {value}
+                </AutocompleteItem>
+              ))}
+            </Autocomplete>
+
+            {mode === 'actual' && (
               <Autocomplete
-                label="并发数"
+                ref={actualTopRef}
+                label="优选数量"
                 size="sm"
-                className="w-28"
-                classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+                className="w-32"
                 allowsCustomValue
                 isClearable={false}
-                inputValue={currentConcurrencyInput}
+                inputValue={actualTopCount}
                 selectedKey={null}
-                isInvalid={!anyTesting && currentConcurrency === undefined}
+                isInvalid={!anyTesting && actualTopLimit === undefined}
                 errorMessage={
-                  currentConcurrencyInput === ''
-                    ? '请输入并发数'
-                    : `请输入 ${MIN_CONCURRENCY}-${concurrencyMax} 的整数`
+                  actualTopCount === ''
+                    ? '请输入数量'
+                    : proxies.length === 0
+                      ? '当前没有可选节点'
+                      : `请输入 1-${proxies.length} 的整数`
                 }
                 isDisabled={anyTesting}
-                onInputChange={(value) => {
-                  if (mode === 'actual') {
-                    setActualConcurrencyInput(value)
-                  } else {
-                    setConcurrencyInput(value)
-                  }
-                }}
+                onInputChange={setActualTopCount}
                 onSelectionChange={(key) => {
-                  if (key === null) return
-                  if (mode === 'actual') setActualConcurrencyInput(String(key))
-                  else setConcurrencyInput(String(key))
-                }}
-                onBlur={() => {
-                  if (mode === 'link' && currentConcurrency !== undefined) {
-                    void patchAppConfig({ codexTestConcurrency: currentConcurrency })
+                  if (key !== null) {
+                    setActualTopCount(String(key))
+                    actualTopRef.current?.blur()
                   }
                 }}
               >
-                {concurrencyOptions.map((value) => (
+                {actualTopOptions.map((value) => (
                   <AutocompleteItem key={String(value)} textValue={String(value)}>
                     {value}
                   </AutocompleteItem>
                 ))}
               </Autocomplete>
+            )}
 
-              {mode === 'actual' && (
-                <Autocomplete
-                  label="优选数量"
-                  size="sm"
-                  className="w-32"
-                  allowsCustomValue
-                  isClearable={false}
-                  inputValue={actualTopCount}
-                  selectedKey={null}
-                  isInvalid={!anyTesting && actualTopLimit === undefined}
-                  errorMessage={
-                    actualTopCount === ''
-                      ? '请输入数量'
-                      : proxies.length === 0
-                        ? '当前没有可选节点'
-                        : `请输入 1-${proxies.length} 的整数`
-                  }
-                  isDisabled={anyTesting}
-                  onInputChange={setActualTopCount}
-                  onSelectionChange={(key) => {
-                    if (key !== null) setActualTopCount(String(key))
-                  }}
-                >
-                  {actualTopOptions.map((value) => (
-                    <AutocompleteItem key={String(value)} textValue={String(value)}>
-                      {value}
-                    </AutocompleteItem>
-                  ))}
-                </Autocomplete>
-              )}
-
-              {currentTesting ? (
-                <Button
-                  color="danger"
-                  variant="flat"
-                  isLoading={currentCancelling}
-                  startContent={currentCancelling ? undefined : <MdStop />}
-                  onPress={() => void (mode === 'actual' ? stopCodexActualTest() : stopCodexTest())}
-                >
-                  停止测试
-                </Button>
-              ) : anyTesting ? (
-                <Button variant="flat" isDisabled>
-                  另一模式正在测试
-                </Button>
-              ) : (
-                <Button
-                  color="primary"
-                  variant="solid"
-                  isDisabled={
-                    selectedNames.length === 0 ||
-                    currentConcurrency === undefined ||
-                    (mode === 'actual' && actualTopLimit === undefined)
-                  }
-                  onPress={() =>
-                    void (mode === 'actual'
-                      ? runCodexActualTest(
-                          selectedNames,
-                          actualRounds,
-                          currentConcurrency!,
-                          group?.name
-                        )
-                      : runCodexTest(selectedNames, rounds, currentConcurrency!, group?.name))
-                  }
-                >
-                  {mode === 'actual' ? '真实测试' : '测试'} {selectedNames.length} 个节点
-                </Button>
-              )}
-            </div>
-
-            {mode === 'link' ? (
-              <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
-                目标：chatgpt.com:443 · 流程：代理 CONNECT → TLS → HTTPS → WebSocket Upgrade。
-                不发送提示词，不调用模型；收到服务响应即可用于比较链路速度。
-              </div>
+            {currentTesting ? (
+              <Button
+                color="danger"
+                variant="flat"
+                isLoading={currentCancelling}
+                startContent={currentCancelling ? undefined : <MdStop />}
+                onPress={() => void (mode === 'actual' ? stopCodexActualTest() : stopCodexTest())}
+              >
+                停止测试
+              </Button>
+            ) : anyTesting ? (
+              <Button variant="flat" isDisabled>
+                另一模式正在测试
+              </Button>
             ) : (
-              <div className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-foreground-600">
-                使用本机已登录的官方 Codex 发起真实模型请求。每轮都会消耗 Codex
-                配额；请求在只读临时目录运行、禁止工具，并验证连接确实经过当前隐藏测速通道。建议先运行链路测试，再用“选中链路最快前
-                X 个”筛选节点。
-              </div>
+              <Button
+                color="primary"
+                variant="solid"
+                isDisabled={
+                  selectedNames.length === 0 ||
+                  currentConcurrency === undefined ||
+                  (mode === 'actual' && actualTopLimit === undefined)
+                }
+                onPress={() =>
+                  void (mode === 'actual'
+                    ? runCodexActualTest(
+                        selectedNames,
+                        actualRounds,
+                        currentConcurrency!,
+                        group?.name
+                      )
+                    : runCodexTest(selectedNames, rounds, currentConcurrency!, group?.name))
+                }
+              >
+                {mode === 'actual' ? '真实测试' : '测试'} {selectedNames.length} 个节点
+              </Button>
             )}
+          </TestPageControlRow>
 
-            {currentSavedAt && currentHistoryGroup === group?.name && !currentTesting && (
-              <div className="text-xs text-foreground-500">
-                已恢复上次测试结果 · {formatTestHistoryTime(currentSavedAt)}
-              </div>
-            )}
+          {mode === 'link' ? (
+            <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
+              目标：chatgpt.com:443 · 流程：代理 CONNECT → TLS → HTTPS → WebSocket Upgrade。
+              不发送提示词，不调用模型；收到服务响应即可用于比较链路速度。
+            </div>
+          ) : (
+            <div className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-foreground-600">
+              使用本机已登录的官方 Codex 发起真实模型请求。每轮都会消耗 Codex
+              配额；请求在只读临时目录运行、禁止工具，并验证连接确实经过当前隐藏测速通道。建议先运行链路测试，再用“选中链路最快前
+              X 个”筛选节点。
+            </div>
+          )}
 
-            {currentTesting && activeProgress && (
-              <div>
-                <div className="mb-1 flex justify-between text-xs">
-                  <span className="flag-emoji">
-                    {mode === 'actual'
-                      ? actualStageText[activeProgress.stage as CodexActualTestStage]
-                      : stageText[activeProgress.stage as CodexTestStage]}
-                    ：{activeProgress.proxy}（第 {activeProgress.round}/{activeProgress.rounds} 轮）
-                  </span>
-                  <span>
-                    {activeProgress.completed}/{activeProgress.total}
-                  </span>
-                </div>
-                <Progress
-                  aria-label={mode === 'actual' ? 'Codex 真实响应测试进度' : 'Codex 链路测试进度'}
-                  value={progressValue}
-                  color="primary"
-                />
-              </div>
-            )}
-            {currentError && !currentTesting && (
-              <div className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
-                {currentError}
-              </div>
-            )}
+          {currentSavedAt && currentHistoryGroup === group?.name && !currentTesting && (
+            <div className="text-xs text-foreground-500">
+              已恢复上次测试结果 · {formatTestHistoryTime(currentSavedAt)}
+            </div>
+          )}
 
-            {mode === 'actual' && actualState.logs.length > 0 && (
-              <div className="overflow-hidden rounded-xl border border-divider bg-content1">
-                <div className="flex items-center hover:bg-content2">
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center justify-between px-3 py-2 text-left text-sm"
-                    onClick={() => setActualLogExpanded((current) => !current)}
-                  >
-                    <span className="font-medium">实时测试日志</span>
-                    <span className="text-xs text-foreground-500">
-                      {actualState.logs.length} 条 · {actualLogExpanded ? '收起' : '展开'}
-                    </span>
-                  </button>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    className="mr-2 h-7 min-w-0 shrink-0 px-2"
-                    startContent={<MdContentCopy />}
-                    onPress={() => void copyActualLogs()}
-                  >
-                    复制全部
-                  </Button>
-                </div>
-                {actualLogExpanded && (
-                  <div
-                    ref={actualLogRef}
-                    className="max-h-56 cursor-text select-text overflow-y-auto border-t border-divider bg-content2/40 px-3 py-2 font-mono text-xs"
-                  >
-                    {actualState.logs.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className={`grid grid-cols-[70px_minmax(130px,240px)_1fr] gap-2 py-1 ${
-                          entry.level === 'error'
-                            ? 'text-danger'
-                            : entry.level === 'success'
-                              ? 'text-success'
-                              : 'text-foreground-600'
-                        }`}
-                      >
-                        <span className="tabular-nums text-foreground-400">
-                          {logTime(entry.timestamp)}
-                        </span>
-                        <span className="flag-emoji truncate" title={entry.proxy}>
-                          {entry.proxy
-                            ? `${entry.proxy}${entry.round ? ` · 第 ${entry.round} 轮` : ''}`
-                            : '测试任务'}
-                        </span>
-                        <span className="break-words">{entry.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+          {currentTesting && activeProgress && (
+            <div>
+              <div className="mb-1 flex justify-between text-xs">
+                <span className="flag-emoji">
+                  {mode === 'actual'
+                    ? actualStageText[activeProgress.stage as CodexActualTestStage]
+                    : stageText[activeProgress.stage as CodexTestStage]}
+                  ：{activeProgress.proxy}（第 {activeProgress.round}/{activeProgress.rounds} 轮）
+                </span>
+                <span>
+                  {activeProgress.completed}/{activeProgress.total}
+                </span>
               </div>
-            )}
-          </div>
-        </section>
+              <Progress
+                aria-label={mode === 'actual' ? 'Codex 真实响应测试进度' : 'Codex 链路测试进度'}
+                value={progressValue}
+                color="primary"
+              />
+            </div>
+          )}
+          {currentError && !currentTesting && (
+            <div className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
+              {currentError}
+            </div>
+          )}
+
+          {mode === 'actual' && (
+            <ActualLogPanel
+              logs={actualState.logs}
+              expanded={actualLogExpanded}
+              onToggle={toggleActualLogs}
+              onCopy={copyActualLogs}
+            />
+          )}
+        </TestPageControls>
 
         <section className="min-h-0 flex-1">
           <div>
@@ -891,334 +1279,42 @@ const CodexTest: React.FC = () => {
               </span>
             </div>
 
-            <div className="overflow-x-auto">
-              <div className={mode === 'actual' ? 'min-w-250' : 'min-w-210'}>
-                {mode === 'actual' ? (
-                  <div className="grid grid-cols-[minmax(180px,1.7fr)_repeat(7,minmax(86px,1fr))_82px_72px] gap-2 border-b border-divider px-4 py-2 text-xs text-foreground-500">
-                    {actualSortHeader('name', '节点')}
-                    {actualSortHeader('linkScore', '链路延迟')}
-                    {actualSortHeader('score', '综合耗时')}
-                    {actualSortHeader('firstTokenMs', '首字耗时')}
-                    {actualSortHeader('totalMs', '完整返回')}
-                    {actualSortHeader('successRate', '成功率')}
-                    {actualSortHeader('routeVerifiedRate', '路由验证')}
-                    {actualSortHeader('tokens', 'Token')}
-                    {actualSortHeader('grade', '评级')}
-                    <span className="flex h-6 items-center">操作</span>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-[minmax(160px,1.7fr)_repeat(6,minmax(74px,1fr))_82px_72px] gap-2 border-b border-divider px-4 py-2 text-xs text-foreground-500">
-                    {sortHeader('name', '节点')}
-                    {sortHeader('score', '综合耗时')}
-                    {sortHeader('tunnelMs', 'CONNECT')}
-                    {sortHeader('tlsMs', 'TLS')}
-                    {sortHeader('httpsTtfbMs', 'HTTPS')}
-                    {sortHeader('websocketMs', 'WebSocket')}
-                    {sortHeader('successRate', '成功率')}
-                    {sortHeader('grade', '评级')}
-                    <span className="flex h-6 items-center">操作</span>
-                  </div>
-                )}
+            <TestResultTableViewport
+              minWidthClassName={mode === 'actual' ? 'min-w-250' : 'min-w-210'}
+            >
+              {mode === 'actual' ? (
+                <TestResultTableHeader columnsClassName={ACTUAL_TABLE_COLUMNS}>
+                  {actualSortHeader('name', '节点')}
+                  {actualSortHeader('linkScore', '链路延迟')}
+                  {actualSortHeader('score', '综合耗时')}
+                  {actualSortHeader('firstTokenMs', '首字耗时')}
+                  {actualSortHeader('totalMs', '完整返回')}
+                  {actualSortHeader('successRate', '成功率')}
+                  {actualSortHeader('routeVerifiedRate', '路由验证')}
+                  {actualSortHeader('tokens', 'Token')}
+                  {actualSortHeader('grade', '评级')}
+                  <TestResultActionHeader />
+                </TestResultTableHeader>
+              ) : (
+                <TestResultTableHeader columnsClassName={LINK_TABLE_COLUMNS}>
+                  {sortHeader('name', '节点')}
+                  {sortHeader('score', '综合耗时')}
+                  {sortHeader('tunnelMs', 'CONNECT')}
+                  {sortHeader('tlsMs', 'TLS')}
+                  {sortHeader('httpsTtfbMs', 'HTTPS')}
+                  {sortHeader('websocketMs', 'WebSocket')}
+                  {sortHeader('successRate', '成功率')}
+                  {sortHeader('grade', '评级')}
+                  <TestResultActionHeader />
+                </TestResultTableHeader>
+              )}
 
-                {activeRows.length === 0 ? (
-                  <div className="flex min-h-40 items-center justify-center text-sm text-foreground-400">
-                    当前代理组没有可测试节点
-                  </div>
-                ) : mode === 'actual' ? (
-                  actualRows.map((proxy) => {
-                    const result = visibleActualResults[proxy.name]
-                    const grade = result ? actualResultGrade(result) : undefined
-                    const canSwitch = Boolean(
-                      switchGroup?.all.some((item) => item.name === proxy.name)
-                    )
-                    const isCurrent = switchGroup?.now === proxy.name
-                    return (
-                      <div
-                        key={proxy.name}
-                        className="grid grid-cols-[minmax(180px,1.7fr)_repeat(7,minmax(86px,1fr))_82px_72px] items-center gap-2 border-b border-divider/60 px-4 py-3 text-sm last:border-b-0"
-                      >
-                        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                          <Checkbox
-                            aria-label={`选择节点 ${proxy.name}`}
-                            className="shrink-0"
-                            classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                            isSelected={actualSelected.has(proxy.name)}
-                            isDisabled={anyTesting}
-                            onValueChange={(checked) => {
-                              setActualSelected((current) => {
-                                const next = new Set(current)
-                                if (checked) next.add(proxy.name)
-                                else next.delete(proxy.name)
-                                return next
-                              })
-                            }}
-                          />
-                          <Tooltip placement="top" content={proxy.name}>
-                            <span className="flag-emoji block min-w-0 flex-1 truncate">
-                              {proxy.name}
-                            </span>
-                          </Tooltip>
-                        </div>
-                        {metricResult(
-                          visibleResults[proxy.name],
-                          visibleResults[proxy.name]?.score,
-                          'combinedMs'
-                        )}
-                        {actualMetricResult(result, result?.score, 'score', '综合耗时')}
-                        {actualMetricResult(
-                          result,
-                          result?.firstTokenMs,
-                          'firstTokenMs',
-                          '首字耗时'
-                        )}
-                        {actualMetricResult(result, result?.totalMs, 'totalMs', '完整返回')}
-                        {result ? (
-                          <Tooltip
-                            placement="top"
-                            content={
-                              <div className="space-y-1 px-1 py-0.5 text-xs">
-                                <div>模型：{result.model || '未知'}</div>
-                                <div>
-                                  成功：{result.succeeded}/{result.completedRounds} 轮
-                                </div>
-                                {result.roundResults.map((round) => (
-                                  <div key={round.round} className="flex max-w-96 gap-3">
-                                    <span>第 {round.round} 轮</span>
-                                    <span className={round.success ? '' : 'text-danger'}>
-                                      {round.success ? '成功' : round.error || '失败'}
-                                      {round.model ? ` · ${round.model}` : ''}
-                                    </span>
-                                  </div>
-                                ))}
-                                {result.error && (
-                                  <div className="max-w-80 text-danger">{result.error}</div>
-                                )}
-                              </div>
-                            }
-                          >
-                            <span className="inline-flex">
-                              {Math.round(result.successRate * 100)}%
-                            </span>
-                          </Tooltip>
-                        ) : (
-                          <span>—</span>
-                        )}
-                        {result ? (
-                          <Tooltip
-                            placement="top"
-                            content={
-                              <div className="space-y-1 px-1 py-0.5 text-xs">
-                                <div>只有经过对应隐藏监听和隐藏代理组才算验证成功</div>
-                                {result.roundResults.map((round) => (
-                                  <div key={round.round} className="border-t border-divider pt-1">
-                                    <div className="flex justify-between gap-4">
-                                      <span>第 {round.round} 轮</span>
-                                      <span
-                                        className={
-                                          round.routeVerified ? 'text-success' : 'text-danger'
-                                        }
-                                      >
-                                        {round.routeVerified ? '已验证' : '未验证'}
-                                      </span>
-                                    </div>
-                                    {round.routes?.map((route, routeIndex) => (
-                                      <div
-                                        key={`${route.inboundName}-${route.host}-${routeIndex}`}
-                                        className="mt-1 max-w-96 space-y-0.5 text-foreground-500"
-                                      >
-                                        <div>
-                                          连接 {routeIndex + 1} · 入站：
-                                          {route.inboundName || '未报告'}
-                                        </div>
-                                        <div>域名：{route.host || '未报告'}</div>
-                                        <div>DNS：{route.dnsMode || '未报告'}</div>
-                                        <div>
-                                          远端：
-                                          {route.remoteDestination ||
-                                            route.destinationIP ||
-                                            '未报告'}
-                                        </div>
-                                        <div className="break-all">
-                                          链路：{route.chains.join(' → ')}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ))}
-                              </div>
-                            }
-                          >
-                            <span
-                              className={`inline-flex ${result.routeVerifiedRate === 1 ? 'text-success' : 'text-danger'}`}
-                            >
-                              {Math.round(result.routeVerifiedRate * 100)}%
-                            </span>
-                          </Tooltip>
-                        ) : (
-                          <span>—</span>
-                        )}
-                        {result ? (
-                          <Tooltip
-                            placement="top"
-                            content={
-                              <div className="space-y-1 px-1 py-0.5 text-xs">
-                                <div>总计：{result.tokenUsage.totalTokens}</div>
-                                <div>输入：{result.tokenUsage.inputTokens}</div>
-                                <div>缓存输入：{result.tokenUsage.cachedInputTokens}</div>
-                                <div>输出：{result.tokenUsage.outputTokens}</div>
-                                <div>推理输出：{result.tokenUsage.reasoningOutputTokens}</div>
-                                <div className="border-t border-divider pt-1">
-                                  {result.roundResults.map((round) => (
-                                    <div key={round.round} className="flex justify-between gap-4">
-                                      <span>第 {round.round} 轮</span>
-                                      <span>{round.tokenUsage?.totalTokens ?? '—'}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            }
-                          >
-                            <span className="inline-flex">{result.tokenUsage.totalTokens}</span>
-                          </Tooltip>
-                        ) : (
-                          <span>—</span>
-                        )}
-                        {grade ? (
-                          <Chip
-                            size="sm"
-                            color={grade.color}
-                            variant="flat"
-                            startContent={
-                              grade.color === 'danger' ? <MdErrorOutline /> : <MdCheckCircle />
-                            }
-                          >
-                            {grade.label}
-                          </Chip>
-                        ) : (
-                          <span className="text-xs text-foreground-400">未测试</span>
-                        )}
-                        <Tooltip
-                          placement="top"
-                          isDisabled={canSwitch}
-                          content={`切换目标组“${switchGroup?.name || '未知'}”不包含该节点`}
-                        >
-                          <span>
-                            <Button
-                              size="sm"
-                              color={isCurrent ? 'success' : 'primary'}
-                              variant="flat"
-                              className="min-w-0 px-2"
-                              isLoading={switchingProxy === proxy.name}
-                              isDisabled={Boolean(switchingProxy) || isCurrent || !canSwitch}
-                              onPress={() => void switchProxy(proxy.name)}
-                            >
-                              {isCurrent ? '当前' : canSwitch ? '切换' : '不可用'}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      </div>
-                    )
-                  })
-                ) : (
-                  rows.map((proxy) => {
-                    const result = visibleResults[proxy.name]
-                    const grade = result ? resultGrade(result) : undefined
-                    const canSwitch = Boolean(
-                      switchGroup?.all.some((item) => item.name === proxy.name)
-                    )
-                    const isCurrent = switchGroup?.now === proxy.name
-                    return (
-                      <div
-                        key={proxy.name}
-                        className="grid grid-cols-[minmax(160px,1.7fr)_repeat(6,minmax(74px,1fr))_82px_72px] items-center gap-2 border-b border-divider/60 px-4 py-3 text-sm last:border-b-0"
-                      >
-                        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                          <Checkbox
-                            aria-label={`选择节点 ${proxy.name}`}
-                            className="shrink-0"
-                            classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                            isSelected={selected.has(proxy.name)}
-                            isDisabled={anyTesting}
-                            onValueChange={(checked) => {
-                              setSelected((current) => {
-                                const next = new Set(current)
-                                if (checked) next.add(proxy.name)
-                                else next.delete(proxy.name)
-                                return next
-                              })
-                            }}
-                          />
-                          <Tooltip placement="top" content={proxy.name}>
-                            <span className="flag-emoji block min-w-0 flex-1 truncate">
-                              {proxy.name}
-                            </span>
-                          </Tooltip>
-                        </div>
-                        {metricResult(result, result?.score, 'combinedMs')}
-                        {metricResult(result, result?.tunnelMs, 'tunnelMs')}
-                        {metricResult(result, result?.tlsMs, 'tlsMs')}
-                        {metricResult(result, result?.httpsTtfbMs, 'httpsTtfbMs')}
-                        {metricResult(result, result?.websocketMs, 'websocketMs')}
-                        {result ? (
-                          <Tooltip
-                            placement="top"
-                            content={
-                              <div className="space-y-1 px-1 py-0.5 text-xs">
-                                <div>
-                                  已完成：{result.completedRounds}/{result.rounds} 轮
-                                </div>
-                                <div>成功：{result.succeeded} 轮</div>
-                                <div>失败：{result.failed} 轮</div>
-                                <div>成功率：{Math.round(result.successRate * 100)}%</div>
-                              </div>
-                            }
-                          >
-                            <span className="inline-flex">
-                              {Math.round(result.successRate * 100)}%
-                            </span>
-                          </Tooltip>
-                        ) : (
-                          <span>—</span>
-                        )}
-                        {grade ? (
-                          <Chip
-                            size="sm"
-                            color={grade.color}
-                            variant="flat"
-                            startContent={
-                              grade.color === 'danger' ? <MdErrorOutline /> : <MdCheckCircle />
-                            }
-                          >
-                            {grade.label}
-                          </Chip>
-                        ) : (
-                          <span className="text-xs text-foreground-400">未测试</span>
-                        )}
-                        <Tooltip
-                          placement="top"
-                          isDisabled={canSwitch}
-                          content={`切换目标组“${switchGroup?.name || '未知'}”不包含该节点`}
-                        >
-                          <span>
-                            <Button
-                              size="sm"
-                              color={isCurrent ? 'success' : 'primary'}
-                              variant="flat"
-                              className="min-w-0 px-2"
-                              isLoading={switchingProxy === proxy.name}
-                              isDisabled={Boolean(switchingProxy) || isCurrent || !canSwitch}
-                              onPress={() => void switchProxy(proxy.name)}
-                            >
-                              {isCurrent ? '当前' : canSwitch ? '切换' : '不可用'}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </div>
+              {activeRows.length === 0 ? (
+                <TestResultEmptyState />
+              ) : (
+                <TestResultVirtualRows items={renderedRows} />
+              )}
+            </TestResultTableViewport>
           </div>
         </section>
       </div>

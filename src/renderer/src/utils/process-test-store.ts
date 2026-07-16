@@ -48,6 +48,13 @@ function updateSnapshot(patch: Partial<ProcessTestStoreSnapshot>): void {
   listeners.forEach((listener) => listener())
 }
 
+function persistResults(results: Record<string, ProcessTestResult>, processKeys: string[]): void {
+  const savedAt = Date.now()
+  persistedHistory = { processKeys, savedAt, results }
+  writeTestHistory(PROCESS_TEST_HISTORY_KEY, persistedHistory)
+  updateSnapshot({ results, processKeys, savedAt })
+}
+
 function flushProcessTestProgress(): void {
   if (progressTimer !== undefined) window.clearTimeout(progressTimer)
   progressTimer = undefined
@@ -116,20 +123,24 @@ export async function runProcessTest(
     if (currentGeneration !== generation) return
     clearPendingProcessTestProgress()
     const resultMap = Object.fromEntries(results.map((result) => [result.proxy, result]))
-    const savedAt = Date.now()
-    persistedHistory = { processKeys, savedAt, results: resultMap }
-    writeTestHistory(PROCESS_TEST_HISTORY_KEY, persistedHistory)
-    updateSnapshot({ results: resultMap, processKeys, savedAt })
+    persistResults(resultMap, processKeys)
     const succeeded = results.filter((result) => result.successRate > 0).length
     notify(`进程测速完成 ${succeeded}/${results.length}`, {
       variant: succeeded > 0 ? 'success' : 'danger'
     })
   } catch (error) {
     if (currentGeneration !== generation) return
-    clearPendingProcessTestProgress()
     const message = String(error)
-    updateSnapshot(previous)
-    if (message !== '进程测速已停止') {
+    if (message === '进程测速已停止') {
+      flushProcessTestProgress()
+      if (Object.keys(snapshot.results).length > 0) {
+        persistResults(snapshot.results, processKeys)
+      } else {
+        updateSnapshot(previous)
+      }
+    } else {
+      clearPendingProcessTestProgress()
+      updateSnapshot(previous)
       updateSnapshot({ error: message })
       notify(message, { variant: 'danger' })
     }

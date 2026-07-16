@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron'
+import { app, clipboard, ipcMain } from 'electron'
 import {
   mihomoChangeProxy,
   mihomoCloseConnections,
@@ -220,6 +220,11 @@ async function normalizeServiceModePatch(patch: Partial<AppConfig>): Promise<Par
 }
 
 export function registerIpcMainHandlers(): void {
+  ipcMain.handle('writeClipboardText', (_event, text: unknown) => {
+    if (typeof text !== 'string') return { invokeError: '剪贴板内容必须是文本' }
+    clipboard.writeText(text)
+    return undefined
+  })
   ipcMain.handle('mihomoVersion', ipcErrorWrapper(mihomoVersion))
   ipcMain.handle('mihomoConfig', ipcErrorWrapper(mihomoConfig))
   ipcMain.handle('mihomoCloseConnection', (_e, id) => ipcErrorWrapper(mihomoCloseConnection)(id))

@@ -10,10 +10,13 @@ import {
 } from './factory'
 import { mihomoChangeProxy } from './mihomoApi'
 import { acquireNetworkTestChannel } from './networkTestChannel'
+import { appendAppLog } from '../utils/log'
 
 const CLOUDFLARE_URL = 'https://speed.cloudflare.com/__down?bytes={bytes}'
 const TELEGRAM_URL = 'https://telegram.org/dl/desktop/win64'
 const CLOUDFLARE_REQUEST_MAX_BYTES = 50_000_000
+const CLOUDFLARE_REQUEST_SIZES = [CLOUDFLARE_REQUEST_MAX_BYTES, 25_000_000, 10_000_000] as const
+const CLOUDFLARE_CONNECTION_TARGET_BYTES = 10_000_000
 export const MAX_SPEED_TEST_CONNECTIONS = 16
 export const MAX_GENERAL_TEST_NODE_CONCURRENCY = 16
 
@@ -55,6 +58,38 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function safeTestUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined
+  try {
+    const url = new URL(value)
+    return `${url.origin}${url.pathname}`
+  } catch {
+    return '[invalid URL]'
+  }
+}
+
+function errorDiagnostic(error: unknown): Record<string, unknown> {
+  const diagnostic: Record<string, unknown> = {
+    name: error instanceof Error ? error.name : typeof error,
+    message: errorMessage(error)
+  }
+
+  if (axios.isAxiosError(error)) {
+    diagnostic.code = error.code
+    diagnostic.status = error.response?.status
+    diagnostic.statusText = error.response?.statusText
+    diagnostic.requestUrl = safeTestUrl(error.config?.url)
+    diagnostic.cause = error.cause instanceof Error ? error.cause.message : undefined
+  }
+
+  return diagnostic
+}
+
+async function logSpeedTest(event: string, fields: Record<string, unknown> = {}): Promise<void> {
+  const content = JSON.stringify({ time: new Date().toISOString(), event, ...fields })
+  await appendAppLog(`[SpeedTest] ${content}\n`).catch(() => {})
+}
+
 function stopError(): Error {
   return new Error('测速已停止')
 }
@@ -69,13 +104,21 @@ async function resolveConfig(): Promise<ResolvedSpeedTestConfig> {
     speedTestConnections
   } = await getAppConfig()
   const maxBytes = clamp(speedTestMaxBytes, 100_000_000, 2_000_000, 1_000_000_000)
+  const configuredConnections = clamp(speedTestConnections, 4, 1, MAX_SPEED_TEST_CONNECTIONS)
+  const connections =
+    speedTestSource === 'cloudflare'
+      ? Math.min(
+          configuredConnections,
+          Math.max(1, Math.ceil(maxBytes / CLOUDFLARE_CONNECTION_TARGET_BYTES))
+        )
+      : configuredConnections
   return {
     source: speedTestSource,
     customUrl: speedTestUrl,
     durationLimit: clamp(speedTestDuration, 8000, 1000, 30_000),
     maxBytes,
     warmupBytes: clamp(speedTestWarmupBytes, 1_000_000, 0, maxBytes - 1),
-    connections: clamp(speedTestConnections, 4, 1, MAX_SPEED_TEST_CONNECTIONS)
+    connections
   }
 }
 
@@ -101,12 +144,18 @@ function resolveSpeedTestUrl(
   return url.toString()
 }
 
+function resolveCloudflareRequestBytes(remainingBytes: number, perConnectionBytes: number): number {
+  const desiredBytes = Math.min(remainingBytes, perConnectionBytes, CLOUDFLARE_REQUEST_MAX_BYTES)
+  return CLOUDFLARE_REQUEST_SIZES.find((bytes) => bytes <= desiredBytes) ?? desiredBytes
+}
+
 async function runSpeedTestOnChannel(
   proxy: string,
   channel: SpeedTestChannel,
   config: ResolvedSpeedTestConfig,
   current: ActiveSpeedTest,
-  onProgress?: (progress: SpeedTestProgress) => void
+  onProgress?: (progress: SpeedTestProgress) => void,
+  round?: number
 ): Promise<SpeedTestResult> {
   if (current.cancelled) throw stopError()
 
@@ -138,7 +187,7 @@ async function runSpeedTestOnChannel(
       if (remainingBytes <= 0) break
       const requestBytes =
         config.source === 'cloudflare'
-          ? Math.min(remainingBytes, perConnectionRequestBytes, CLOUDFLARE_REQUEST_MAX_BYTES)
+          ? resolveCloudflareRequestBytes(remainingBytes, perConnectionRequestBytes)
           : Math.min(remainingBytes, perConnectionRequestBytes)
       inFlightReservedBytes += requestBytes
       const url = resolveSpeedTestUrl(config.source, config.customUrl, requestBytes)
@@ -241,6 +290,23 @@ async function runSpeedTestOnChannel(
       duration: measuredDuration,
       testedAt: Date.now()
     }
+  } catch (error) {
+    await logSpeedTest('node-failed', {
+      proxy,
+      round,
+      channel: channel.group,
+      port: channel.port,
+      source: config.source,
+      url: safeTestUrl(testedUrl || config.customUrl),
+      durationLimit: config.durationLimit,
+      maxBytes: config.maxBytes,
+      warmupBytes: config.warmupBytes,
+      connections: config.connections,
+      downloadedBytes,
+      measuredBytes,
+      ...errorDiagnostic(error)
+    })
+    throw error
   } finally {
     if (timer) clearTimeout(timer)
     controller.abort()
@@ -259,6 +325,15 @@ export async function mihomoProxySpeedTest(
 
   try {
     const config = await resolveConfig()
+    await logSpeedTest('single-started', {
+      proxy,
+      source: config.source,
+      url: safeTestUrl(config.customUrl),
+      durationLimit: config.durationLimit,
+      maxBytes: config.maxBytes,
+      warmupBytes: config.warmupBytes,
+      connections: config.connections
+    })
     return await runSpeedTestOnChannel(
       proxy,
       { group: SPEED_TEST_GROUP, port: getRuntimeSpeedTestPort() },
@@ -300,6 +375,17 @@ export async function mihomoGeneralSpeedTest(
 
   try {
     const config = await resolveConfig()
+    await logSpeedTest('general-started', {
+      nodes: uniqueProxies.length,
+      rounds: normalizedRounds,
+      concurrency: normalizedConcurrency,
+      source: config.source,
+      url: safeTestUrl(config.customUrl),
+      durationLimit: config.durationLimit,
+      maxBytes: config.maxBytes,
+      warmupBytes: config.warmupBytes,
+      connections: config.connections
+    })
     const runSample = async (
       proxy: string,
       round: number,
@@ -317,16 +403,23 @@ export async function mihomoGeneralSpeedTest(
 
       let sample: GeneralSpeedTestRoundResult
       try {
-        const result = await runSpeedTestOnChannel(proxy, channel, config, current, (progress) => {
-          onProgress?.({
-            ...progress,
-            round,
-            rounds: normalizedRounds,
-            stage: 'downloading',
-            completed,
-            total
-          })
-        })
+        const result = await runSpeedTestOnChannel(
+          proxy,
+          channel,
+          config,
+          current,
+          (progress) => {
+            onProgress?.({
+              ...progress,
+              round,
+              rounds: normalizedRounds,
+              stage: 'downloading',
+              completed,
+              total
+            })
+          },
+          round
+        )
         sample = { proxy, round, result }
       } catch (error) {
         if (current.cancelled) throw stopError()
@@ -359,7 +452,19 @@ export async function mihomoGeneralSpeedTest(
       )
     }
 
+    await logSpeedTest('general-completed', {
+      total,
+      succeeded: results.filter((item) => item.result).length,
+      failed: results.filter((item) => item.error).length
+    })
     return results.sort((left, right) => left.round - right.round)
+  } catch (error) {
+    await logSpeedTest('general-failed', {
+      completed,
+      total,
+      ...errorDiagnostic(error)
+    })
+    throw error
   } finally {
     current.controllers.forEach((controller) => controller.abort())
     if (activeSpeedTest === current) activeSpeedTest = undefined

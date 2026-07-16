@@ -15,13 +15,15 @@ export function normalizeDelayTestConcurrency(value?: number): number {
 export async function runDelayTestsWithConcurrency<T>(
   items: T[],
   concurrency: number | undefined,
-  run: (item: T) => Promise<void>
+  run: (item: T) => Promise<void>,
+  shouldStop: () => boolean = () => false
 ): Promise<void> {
   const workerCount = Math.min(normalizeDelayTestConcurrency(concurrency), items.length)
 
   await Promise.all(
     Array.from({ length: workerCount }, async (_, workerIndex) => {
       for (let index = workerIndex; index < items.length; index += workerCount) {
+        if (shouldStop()) return
         await run(items[index])
       }
     })

@@ -46,6 +46,11 @@ interface RouteMonitor {
 let activeCodexActualTest: ActiveCodexActualTest | undefined
 let resolvedCodexBinary: string | undefined
 
+interface CodexProbeResult {
+  available: boolean
+  reason?: string
+}
+
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -195,47 +200,78 @@ function aggregateResult(
   }
 }
 
-function probeCodexBinary(candidate: string): Promise<boolean> {
+function probeCodexBinary(candidate: string): Promise<CodexProbeResult> {
   return new Promise((resolve) => {
     let settled = false
-    const child = spawn(candidate, ['--version'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: codexBinaryNeedsShell(candidate)
-    })
     let output = ''
-    const finish = (available: boolean): void => {
+    let child: ChildProcess
+    try {
+      child = spawn(candidate, ['--version'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: codexBinaryNeedsShell(candidate),
+        windowsHide: true
+      })
+    } catch (error) {
+      resolve({ available: false, reason: errorMessage(error) })
+      return
+    }
+    const finish = (result: CodexProbeResult): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve(available)
+      resolve(result)
     }
     const timer = setTimeout(() => {
       terminateChildProcess(child, true)
-      finish(false)
+      finish({ available: false, reason: '探测超时' })
     }, 5000)
-    child.stdout.on('data', (chunk: Buffer | string) => {
+    child.stdout?.on('data', (chunk: Buffer | string) => {
       output += chunk.toString()
     })
-    child.stderr.on('data', (chunk: Buffer | string) => {
+    child.stderr?.on('data', (chunk: Buffer | string) => {
       output += chunk.toString()
     })
-    child.once('error', () => finish(false))
-    child.once('exit', (code) => finish(code === 0 && /codex/i.test(output)))
+    child.once('error', (error) => {
+      const code = (error as NodeJS.ErrnoException).code
+      finish({ available: false, reason: code ? `${code}: ${error.message}` : error.message })
+    })
+    child.once('exit', (code) => {
+      const detail = output.trim().replace(/\s+/g, ' ').slice(0, 240)
+      finish({
+        available: code === 0 && /codex/i.test(output),
+        reason:
+          code === 0 && /codex/i.test(output)
+            ? undefined
+            : `退出码 ${code ?? '未知'}${detail ? `：${detail}` : ''}`
+      })
+    })
   })
 }
 
 async function resolveCodexBinary(): Promise<string> {
-  if (resolvedCodexBinary) return resolvedCodexBinary
+  if (resolvedCodexBinary) {
+    const cached = await probeCodexBinary(resolvedCodexBinary)
+    if (cached.available) return resolvedCodexBinary
+    resolvedCodexBinary = undefined
+  }
+  const failures: Array<{ candidate: string; reason: string }> = []
   for (const candidate of getCodexBinaryCandidates()) {
-    if (await probeCodexBinary(candidate)) {
+    const result = await probeCodexBinary(candidate)
+    if (result.available) {
       resolvedCodexBinary = candidate
       return candidate
     }
+    failures.push({ candidate, reason: result.reason || '不可用' })
   }
+  const displayed = failures
+    .slice(0, 12)
+    .map(({ candidate, reason }) => `- ${candidate}：${reason.replace(/\s+/g, ' ').slice(0, 200)}`)
+    .join('\n')
+  const omitted = failures.length > 12 ? `\n- 另有 ${failures.length - 12} 个候选不可用` : ''
   throw new Error(
     process.platform === 'win32'
-      ? '未找到可用的 Codex。请安装 Windows 原生 Codex，或将 codex.exe 加入 PATH'
-      : '未找到可用的 Codex，请先安装或登录 Codex CLI'
+      ? `未找到可用的 Codex。可安装 Codex Desktop/CLI，或通过 SPARKLE_CODEX_BINARY 指定路径。\n已尝试：\n${displayed}${omitted}`
+      : `未找到可用的 Codex。请安装 Codex CLI，或通过 SPARKLE_CODEX_BINARY 指定路径。\n已尝试：\n${displayed}${omitted}`
   )
 }
 

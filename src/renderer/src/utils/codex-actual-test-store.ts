@@ -42,6 +42,9 @@ let snapshot = createIdleSnapshot()
 let generation = 0
 let nextLogId = 0
 const listeners = new Set<() => void>()
+let pendingProgresses: CodexActualTestProgress[] = []
+let progressTimer: number | undefined
+let progressFlushInterval = 100
 
 function logEntry(
   message: string,
@@ -119,6 +122,39 @@ function updateSnapshot(patch: Partial<CodexActualTestStoreSnapshot>): void {
   listeners.forEach((listener) => listener())
 }
 
+function persistResults(
+  results: Record<string, CodexActualTestResult>,
+  logs: CodexActualTestLogEntry[],
+  groupName?: string
+): void {
+  const savedAt = Date.now()
+  persistedHistory = { groupName, savedAt, results, logs }
+  writeTestHistory(CODEX_ACTUAL_TEST_HISTORY_KEY, persistedHistory)
+  updateSnapshot({ results, logs, groupName, savedAt })
+}
+
+function flushProgress(): void {
+  if (progressTimer !== undefined) window.clearTimeout(progressTimer)
+  progressTimer = undefined
+  if (pendingProgresses.length === 0 || !snapshot.testing) return
+
+  const progresses = pendingProgresses
+  pendingProgresses = []
+  let logs = snapshot.logs
+  let results = snapshot.results
+  progresses.forEach((progress) => {
+    logs = [...logs, ...progressLogs(progress)].slice(-300)
+    if (progress.result) results = { ...results, [progress.result.proxy]: progress.result }
+  })
+  updateSnapshot({ progress: progresses.at(-1), logs, results })
+}
+
+function clearPendingProgress(): void {
+  if (progressTimer !== undefined) window.clearTimeout(progressTimer)
+  progressTimer = undefined
+  pendingProgresses = []
+}
+
 export function subscribeCodexActualTestStore(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -144,6 +180,8 @@ export async function runCodexActualTest(
   }
 
   const currentGeneration = generation
+  progressFlushInterval = proxies.length > 30 ? 500 : 100
+  clearPendingProgress()
   const previous = {
     results: snapshot.results,
     groupName: snapshot.groupName,
@@ -162,28 +200,32 @@ export async function runCodexActualTest(
   try {
     const results = await mihomoCodexActualTest(proxies, rounds, concurrency)
     if (currentGeneration !== generation) return
+    flushProgress()
     const resultMap = Object.fromEntries(results.map((result) => [result.proxy, result]))
-    const savedAt = Date.now()
     const logs = appendLog(
       logEntry(
         `测试完成：${results.filter((result) => result.succeeded > 0).length}/${results.length} 个节点至少成功 1 轮`,
         results.some((result) => result.succeeded > 0) ? 'success' : 'error'
       )
     )
-    persistedHistory = { groupName, savedAt, results: resultMap, logs }
-    writeTestHistory(CODEX_ACTUAL_TEST_HISTORY_KEY, persistedHistory)
-    updateSnapshot({ results: resultMap, groupName, savedAt })
+    persistResults(resultMap, logs, groupName)
     const succeeded = results.filter((result) => result.succeeded > 0).length
     notify(`Codex 真实响应测试完成 ${succeeded}/${results.length}`, {
       variant: succeeded > 0 ? 'success' : 'danger'
     })
   } catch (error) {
     if (currentGeneration !== generation) return
+    flushProgress()
     const message = String(error)
-    updateSnapshot(previous)
     if (message === 'Codex 真实响应测试已停止') {
-      appendLog(logEntry('测试已由用户停止'))
+      const logs = [...snapshot.logs, logEntry('测试已由用户停止')].slice(-300)
+      if (Object.keys(snapshot.results).length > 0) {
+        persistResults(snapshot.results, logs, groupName)
+      } else {
+        updateSnapshot({ ...previous, logs })
+      }
     } else {
+      updateSnapshot(previous)
       appendLog(logEntry(`测试异常终止：${message}`, 'error'))
       updateSnapshot({ error: message })
       notify(message, { variant: 'danger' })
@@ -221,6 +263,7 @@ export async function stopCodexActualTest(): Promise<void> {
 
 function resetCodexActualTestStore(): void {
   generation++
+  clearPendingProgress()
   if (snapshot.testing) void cancelMihomoCodexActualTest()
   snapshot = createIdleSnapshot()
   listeners.forEach((listener) => listener())
@@ -230,14 +273,10 @@ const unsubscribeProgress = window.electron.ipcRenderer.on(
   'mihomoCodexActualTestProgress',
   (_event, progress: CodexActualTestProgress) => {
     if (!snapshot.testing) return
-    const logs = [...snapshot.logs, ...progressLogs(progress)].slice(-300)
-    updateSnapshot({
-      progress,
-      logs,
-      results: progress.result
-        ? { ...snapshot.results, [progress.result.proxy]: progress.result }
-        : snapshot.results
-    })
+    pendingProgresses.push(progress)
+    if (progressTimer === undefined) {
+      progressTimer = window.setTimeout(flushProgress, progressFlushInterval)
+    }
   }
 )
 const unsubscribeCoreStarted = window.electron.ipcRenderer.on(
@@ -247,6 +286,7 @@ const unsubscribeCoreStarted = window.electron.ipcRenderer.on(
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
+    clearPendingProgress()
     unsubscribeProgress()
     unsubscribeCoreStarted()
   })

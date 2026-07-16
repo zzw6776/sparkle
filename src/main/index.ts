@@ -263,7 +263,7 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
     windowStateManager.attach(mainWindow)
     mainWindow.on('ready-to-show', async () => {
       const { silentStart = false } = await getAppConfig()
-      if (!silentStart) {
+      if (is.dev || !silentStart) {
         if (quitTimeout) {
           clearTimeout(quitTimeout)
         }

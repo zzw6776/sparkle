@@ -2,7 +2,11 @@ import { randomBytes } from 'node:crypto'
 import net from 'node:net'
 import { performance } from 'node:perf_hooks'
 import tls from 'node:tls'
-import { getRuntimeCodexTestChannels, MAX_CODEX_TEST_CONCURRENCY } from './factory'
+import {
+  ensureRuntimeTestChannelCapacity,
+  getRuntimeCodexTestChannels,
+  MAX_CODEX_TEST_CONCURRENCY
+} from './factory'
 import { mihomoChangeProxy } from './mihomoApi'
 import { acquireNetworkTestChannel } from './networkTestChannel'
 
@@ -386,13 +390,19 @@ export async function mihomoCodexTest(
   const uniqueProxies = [...new Set(proxies.map((proxy) => proxy.trim()).filter(Boolean))]
   if (uniqueProxies.length === 0) throw new Error('请至少选择一个节点')
   const normalizedRounds = Math.min(5, Math.max(1, Math.trunc(rounds) || 3))
+  const requestedConcurrency = Math.min(
+    MAX_CODEX_TEST_CONCURRENCY,
+    uniqueProxies.length,
+    Math.max(1, Math.trunc(concurrency) || 6)
+  )
+  await ensureRuntimeTestChannelCapacity(requestedConcurrency)
   const channels = getRuntimeCodexTestChannels()
   if (channels.length === 0) throw new Error('Codex 测试通道不可用，请重启内核后重试')
   const normalizedConcurrency = Math.min(
     MAX_CODEX_TEST_CONCURRENCY,
     channels.length,
     uniqueProxies.length,
-    Math.max(1, Math.trunc(concurrency) || 6)
+    requestedConcurrency
   )
   const releaseTestChannel = acquireNetworkTestChannel('codex')
   const current: ActiveCodexTest = { controller: new AbortController(), cancelled: false }

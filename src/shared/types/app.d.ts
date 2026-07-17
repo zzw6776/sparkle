@@ -7,6 +7,14 @@ type AppNotificationMode = 'system' | 'toast'
 type AppNotificationVariant = 'default' | 'accent' | 'success' | 'warning' | 'danger'
 type SpeedTestSource = 'cloudflare' | 'telegram' | 'custom'
 
+interface TestChannelCapacityStatus {
+  current: number
+  configured: number
+  default: number
+  max: number
+  restartRequired: boolean
+}
+
 interface SpeedTestResult {
   proxy: string
   source: SpeedTestSource
@@ -367,6 +375,7 @@ interface AppConfig {
   speedTestMaxBytes?: number
   speedTestWarmupBytes?: number
   speedTestConnections?: number
+  testChannelCapacity?: number
   generalTestRounds?: number
   generalTestNodeConcurrency?: number
   generalTestConfigExpanded?: boolean

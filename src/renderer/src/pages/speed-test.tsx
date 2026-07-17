@@ -1,10 +1,38 @@
-import { Card, CardBody } from '@heroui/react'
+import { Button, Card, CardBody } from '@heroui/react'
 import BasePage from '@renderer/components/base/base-page'
-import { MdDownload, MdLan, MdOutlineArrowForward, MdSpeed } from 'react-icons/md'
+import { useAppConfig } from '@renderer/hooks/use-app-config'
+import { getTestChannelCapacityStatus } from '@renderer/utils/ipc'
+import { notify } from '@renderer/utils/notification'
+import { useCallback, useEffect, useState } from 'react'
+import { MdDownload, MdLan, MdMemory, MdOutlineArrowForward, MdSpeed } from 'react-icons/md'
 import { useNavigate } from 'react-router-dom'
 
 const SpeedTest: React.FC = () => {
   const navigate = useNavigate()
+  const { patchAppConfig } = useAppConfig()
+  const [capacity, setCapacity] = useState<TestChannelCapacityStatus>()
+  const refreshCapacity = useCallback(async () => {
+    try {
+      setCapacity(await getTestChannelCapacityStatus())
+    } catch (error) {
+      notify(error, { variant: 'danger' })
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshCapacity()
+    return window.electron.ipcRenderer.on('core-started', () => void refreshCapacity())
+  }, [refreshCapacity])
+
+  const resetCapacity = async (): Promise<void> => {
+    if (!capacity || capacity.configured === capacity.default) return
+    const updated = await patchAppConfig({ testChannelCapacity: capacity.default })
+    if (!updated) return
+    await refreshCapacity()
+    notify(`测速通道容量已恢复为 ${capacity.default}，手动重启内核后生效`, {
+      variant: 'success'
+    })
+  }
 
   return (
     <BasePage title="测速中心">
@@ -63,6 +91,33 @@ const SpeedTest: React.FC = () => {
             </div>
           </CardBody>
         </Card>
+
+        {capacity && (
+          <Card className="bg-content2 md:col-span-2">
+            <CardBody className="flex flex-row flex-wrap items-center justify-between gap-4 p-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-default-200 text-foreground-600">
+                  <MdMemory className="text-xl" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-medium">测试通道容量</div>
+                  <div className="text-sm text-foreground-500">
+                    当前可用 {capacity.current} 个 · 配置 {capacity.configured} 个
+                    {capacity.restartRequired ? ' · 手动重启内核后生效' : ''}
+                  </div>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="flat"
+                isDisabled={capacity.configured === capacity.default}
+                onPress={() => void resetCapacity()}
+              >
+                恢复默认 {capacity.default}
+              </Button>
+            </CardBody>
+          </Card>
+        )}
       </div>
     </BasePage>
   )

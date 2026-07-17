@@ -6,7 +6,7 @@ import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import readline from 'node:readline'
 import { codexBinaryNeedsShell, getCodexBinaryCandidates } from './codexBinary'
-import { getRuntimeCodexTestChannels } from './factory'
+import { ensureRuntimeTestChannelCapacity, getRuntimeCodexTestChannels } from './factory'
 import { mihomoChangeProxy, mihomoCloseConnections, mihomoGetConnections } from './mihomoApi'
 import { acquireNetworkTestChannel } from './networkTestChannel'
 
@@ -876,13 +876,19 @@ export async function mihomoCodexActualTest(
   const uniqueProxies = [...new Set(proxies.map((proxy) => proxy.trim()).filter(Boolean))]
   if (uniqueProxies.length === 0) throw new Error('请至少选择一个节点')
   const normalizedRounds = Math.min(5, Math.max(1, Math.trunc(rounds) || 1))
+  const requestedConcurrency = Math.min(
+    MAX_ACTUAL_CONCURRENCY,
+    uniqueProxies.length,
+    Math.max(1, Math.trunc(concurrency) || 2)
+  )
+  await ensureRuntimeTestChannelCapacity(requestedConcurrency)
   const channels = getRuntimeCodexTestChannels()
   if (channels.length === 0) throw new Error('Codex 测试通道不可用，请重启内核后重试')
   const normalizedConcurrency = Math.min(
     MAX_ACTUAL_CONCURRENCY,
     channels.length,
     uniqueProxies.length,
-    Math.max(1, Math.trunc(concurrency) || 2)
+    requestedConcurrency
   )
   const binary = await resolveCodexBinary()
   const releaseTestChannel = acquireNetworkTestChannel('codex-actual')

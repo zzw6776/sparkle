@@ -1,6 +1,11 @@
 import { ChildProcess, spawn } from 'child_process'
 import { dataDir, coreLogPath, mihomoCorePath } from '../utils/dirs'
-import { generateProfile, getPersistedTestPorts, getRuntimeConfig } from './factory'
+import {
+  generateProfile,
+  getPersistedTestPorts,
+  getRuntimeConfig,
+  normalizeTestChannelCapacity
+} from './factory'
 import {
   getAppConfig,
   getControledMihomoConfig,
@@ -333,7 +338,8 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     disableEmbedCA = false,
     disableSystemCA = false,
     disableNftables = false,
-    safePaths = []
+    safePaths = [],
+    testChannelCapacity
   } = await getAppConfig()
   const controlledMihomoConfig = await getControledMihomoConfig()
   const { 'log-level': logLevel, tun } = controlledMihomoConfig
@@ -368,7 +374,11 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
   }
 
   if (serviceCoreRunning) {
-    const persistedTestPorts = await getPersistedTestPorts(current, diffWorkDir)
+    const persistedTestPorts = await getPersistedTestPorts(
+      current,
+      diffWorkDir,
+      normalizeTestChannelCapacity(testChannelCapacity)
+    )
     if (persistedTestPorts === undefined) {
       await appendAppLog(
         '[Manager]: Running service core has incomplete test listeners, restart required\n'

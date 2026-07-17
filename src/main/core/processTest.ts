@@ -1,7 +1,11 @@
 import net from 'node:net'
 import { performance } from 'node:perf_hooks'
 import tls from 'node:tls'
-import { getRuntimeCodexTestChannels, MAX_CODEX_TEST_CONCURRENCY } from './factory'
+import {
+  ensureRuntimeTestChannelCapacity,
+  getRuntimeCodexTestChannels,
+  MAX_CODEX_TEST_CONCURRENCY
+} from './factory'
 import { mihomoChangeProxy } from './mihomoApi'
 import { acquireNetworkTestChannel } from './networkTestChannel'
 
@@ -312,13 +316,19 @@ export async function mihomoProcessTest(
   if (uniqueTargets.length === 0) throw new Error('请至少选择一个目标域名')
 
   const normalizedRounds = Math.min(5, Math.max(1, Math.trunc(rounds) || 3))
+  const requestedConcurrency = Math.min(
+    MAX_CODEX_TEST_CONCURRENCY,
+    uniqueProxies.length,
+    Math.max(1, Math.trunc(concurrency) || 6)
+  )
+  await ensureRuntimeTestChannelCapacity(requestedConcurrency)
   const channels = getRuntimeCodexTestChannels()
   if (channels.length === 0) throw new Error('进程测速通道不可用，请重启内核后重试')
   const normalizedConcurrency = Math.min(
     MAX_CODEX_TEST_CONCURRENCY,
     channels.length,
     uniqueProxies.length,
-    Math.max(1, Math.trunc(concurrency) || 6)
+    requestedConcurrency
   )
   const releaseTestChannel = acquireNetworkTestChannel('process')
   const current: ActiveProcessTest = { controller: new AbortController(), cancelled: false }

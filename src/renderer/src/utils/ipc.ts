@@ -211,6 +211,10 @@ export async function getAppConfig(force = false): Promise<AppConfig> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('getAppConfig', force))
 }
 
+export async function getTestChannelCapacityStatus(): Promise<TestChannelCapacityStatus> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('getTestChannelCapacityStatus'))
+}
+
 export async function getCachedMihomoLogs(): Promise<
   Array<ControllerLog & { id?: string; seq?: number }>
 > {

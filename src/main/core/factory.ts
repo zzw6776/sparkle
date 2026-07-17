@@ -7,7 +7,8 @@ import {
   getOverride,
   getOverrideItem,
   getOverrideConfig,
-  getAppConfig
+  getAppConfig,
+  patchAppConfig
 } from '../config'
 import {
   mihomoProfileWorkDir,
@@ -47,7 +48,8 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
     diffWorkDir = false,
     controlDns = true,
     controlSniff = true,
-    speedTestPort = 17891
+    speedTestPort = 17891,
+    testChannelCapacity
   } = await getAppConfig()
   const currentProfileConfig = await getProfile(current)
   rawProfileStr = await getProfileStr(current)
@@ -68,7 +70,12 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
   const profile = deepMerge(JSON.parse(JSON.stringify(currentProfile)), configToMerge)
 
   configureDevelopmentIsolation(profile)
-  await configureTestChannels(profile, speedTestPort, options.reuseTestPorts)
+  await configureTestChannels(
+    profile,
+    speedTestPort,
+    normalizeTestChannelCapacity(testChannelCapacity),
+    options.reuseTestPorts
+  )
   await cleanProfile(profile, controlDns, controlSniff)
 
   runtimeConfig = profile
@@ -84,6 +91,7 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
 
 export const SPEED_TEST_GROUP = '__SPARKLE_SPEEDTEST__'
 const SPEED_TEST_LISTENER = 'sparkle-speedtest'
+export const DEFAULT_TEST_CHANNEL_CAPACITY = 6
 export const MAX_CODEX_TEST_CONCURRENCY = 16
 const CODEX_TEST_GROUP_PREFIX = '__SPARKLE_CODEX_TEST_'
 const CODEX_TEST_LISTENER_PREFIX = 'sparkle-codex-test-'
@@ -98,14 +106,16 @@ function codexTestListener(index: number): string {
 
 export async function getPersistedTestPorts(
   current: string | undefined,
-  diffWorkDir: boolean
+  diffWorkDir: boolean,
+  configuredCapacity?: number
 ): Promise<RuntimeTestPorts | undefined> {
   try {
+    const capacity = normalizeTestChannelCapacity(configuredCapacity)
     const configPath = diffWorkDir ? mihomoWorkConfigPath(current) : mihomoWorkConfigPath('work')
     const profile = parseYaml<MihomoConfig>(await readFile(configPath, 'utf-8'))
     const speedTestPort = profile.listeners?.find((item) => item.name === SPEED_TEST_LISTENER)?.port
     const codexTestPorts = Array.from(
-      { length: MAX_CODEX_TEST_CONCURRENCY },
+      { length: capacity },
       (_, index) => profile.listeners?.find((item) => item.name === codexTestListener(index))?.port
     )
     const ports = [speedTestPort, ...codexTestPorts]
@@ -145,6 +155,7 @@ function isLoopbackPortAvailable(port: number): Promise<boolean> {
 async function configureTestChannels(
   profile: MihomoConfig,
   configuredPort: number,
+  capacity: number,
   reuseTestPorts?: RuntimeTestPorts
 ): Promise<void> {
   const preferredPort =
@@ -184,7 +195,7 @@ async function configureTestChannels(
   }
 
   if (reuseTestPorts) {
-    if (reuseTestPorts.codexTestPorts.length !== MAX_CODEX_TEST_CONCURRENCY) {
+    if (reuseTestPorts.codexTestPorts.length !== capacity) {
       throw new Error('复用的 Codex 测试端口数量无效')
     }
     runtimeSpeedTestPort = await allocatePort(reuseTestPorts.speedTestPort, false)
@@ -196,7 +207,7 @@ async function configureTestChannels(
     runtimeSpeedTestPort = await allocatePort(preferredPort, true)
     runtimeCodexTestPorts = []
     let nextPort = runtimeSpeedTestPort + 1
-    for (let index = 0; index < MAX_CODEX_TEST_CONCURRENCY; index++) {
+    for (let index = 0; index < capacity; index++) {
       const port = await allocatePort(nextPort, true)
       runtimeCodexTestPorts.push(port)
       nextPort = port + 1
@@ -218,7 +229,7 @@ async function configureTestChannels(
     hidden: true
   })
   profile['proxy-groups'].push(createTestGroup(SPEED_TEST_GROUP))
-  for (let index = 0; index < MAX_CODEX_TEST_CONCURRENCY; index++) {
+  for (let index = 0; index < capacity; index++) {
     profile['proxy-groups'].push(createTestGroup(codexTestGroup(index)))
   }
 
@@ -235,7 +246,7 @@ async function configureTestChannels(
     port: runtimeSpeedTestPort,
     proxy: SPEED_TEST_GROUP
   })
-  for (let index = 0; index < MAX_CODEX_TEST_CONCURRENCY; index++) {
+  for (let index = 0; index < capacity; index++) {
     profile.listeners.push({
       name: codexTestListener(index),
       type: 'mixed',
@@ -260,6 +271,48 @@ export function getRuntimeCodexTestChannels(): Array<{
     listener: codexTestListener(index),
     port
   }))
+}
+
+export function normalizeTestChannelCapacity(value?: number): number {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return DEFAULT_TEST_CHANNEL_CAPACITY
+  return Math.min(MAX_CODEX_TEST_CONCURRENCY, Math.max(1, Math.trunc(numericValue)))
+}
+
+export async function getTestChannelCapacityStatus(): Promise<{
+  current: number
+  configured: number
+  default: number
+  max: number
+  restartRequired: boolean
+}> {
+  const { testChannelCapacity } = await getAppConfig()
+  const current = runtimeCodexTestPorts.length
+  const configured = normalizeTestChannelCapacity(testChannelCapacity)
+  return {
+    current,
+    configured,
+    default: DEFAULT_TEST_CHANNEL_CAPACITY,
+    max: MAX_CODEX_TEST_CONCURRENCY,
+    restartRequired: current !== configured
+  }
+}
+
+export async function ensureRuntimeTestChannelCapacity(requestedCapacity: number): Promise<void> {
+  const requested = normalizeTestChannelCapacity(requestedCapacity)
+  const { testChannelCapacity } = await getAppConfig()
+  const configured = normalizeTestChannelCapacity(testChannelCapacity)
+  const current = runtimeCodexTestPorts.length
+
+  if (requested > configured) {
+    await patchAppConfig({ testChannelCapacity: requested })
+  }
+  if (requested <= current) return
+
+  const target = Math.max(configured, requested)
+  throw new Error(
+    `当前内核只有 ${current} 个测速通道，${requested > configured ? `已将通道容量扩展为 ${target}` : `通道容量已设置为 ${target}`}。请手动重启内核后再次测试。`
+  )
 }
 
 async function cleanProfile(

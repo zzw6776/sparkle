@@ -73,6 +73,7 @@ export const defaultConfig: AppConfig = {
   speedTestMaxBytes: 100_000_000,
   speedTestWarmupBytes: 1_000_000,
   speedTestConnections: 4,
+  testChannelCapacity: 6,
   generalTestRounds: 3,
   generalTestNodeConcurrency: 1,
   generalTestConfigExpanded: false,

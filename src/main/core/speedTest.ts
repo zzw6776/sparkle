@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks'
 import type { Readable } from 'node:stream'
 import { getAppConfig } from '../config'
 import {
+  ensureRuntimeTestChannelCapacity,
   getRuntimeCodexTestChannels,
   getRuntimeSpeedTestPort,
   MAX_CODEX_TEST_CONCURRENCY,
@@ -357,6 +358,13 @@ export async function mihomoGeneralSpeedTest(
   const uniqueProxies = [...new Set(proxies.map((proxy) => proxy.trim()).filter(Boolean))]
   if (uniqueProxies.length === 0) throw new Error('请至少选择一个节点')
   const normalizedRounds = clamp(rounds, 3, 1, 20)
+  const requestedConcurrency = Math.min(
+    MAX_GENERAL_TEST_NODE_CONCURRENCY,
+    MAX_CODEX_TEST_CONCURRENCY,
+    uniqueProxies.length,
+    clamp(nodeConcurrency, 1, 1, MAX_GENERAL_TEST_NODE_CONCURRENCY)
+  )
+  await ensureRuntimeTestChannelCapacity(requestedConcurrency)
   const channels = getRuntimeCodexTestChannels()
   if (channels.length === 0) throw new Error('普通测速通道不可用，请重启内核后重试')
   const normalizedConcurrency = Math.min(
@@ -364,7 +372,7 @@ export async function mihomoGeneralSpeedTest(
     MAX_CODEX_TEST_CONCURRENCY,
     channels.length,
     uniqueProxies.length,
-    clamp(nodeConcurrency, 1, 1, MAX_GENERAL_TEST_NODE_CONCURRENCY)
+    requestedConcurrency
   )
   const releaseTestChannel = acquireNetworkTestChannel('download')
   const current: ActiveSpeedTest = { controllers: new Set(), cancelled: false }

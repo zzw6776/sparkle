@@ -99,7 +99,8 @@ import {
   getRuntimeConfigStr,
   getRawProfileStr,
   getCurrentProfileStr,
-  getOverrideProfileStr
+  getOverrideProfileStr,
+  getTestChannelCapacityStatus
 } from '../core/factory'
 import { listWebdavBackups, webdavBackup, webdavDelete, webdavRestore } from '../resolve/backup'
 import { getInterfaces } from '../sys/interface'
@@ -328,6 +329,9 @@ export function registerIpcMainHandlers(): void {
   ipcMain.handle('enableAutoRun', ipcErrorWrapper(enableAutoRun))
   ipcMain.handle('disableAutoRun', ipcErrorWrapper(disableAutoRun))
   ipcMain.handle('getAppConfig', (_e, force) => ipcErrorWrapper(getAppConfig)(force))
+  ipcMain.handle('getTestChannelCapacityStatus', () =>
+    ipcErrorWrapper(getTestChannelCapacityStatus)()
+  )
   ipcMain.handle('getCachedMihomoLogs', () => getCachedMihomoLogs())
   ipcMain.handle('clearCachedMihomoLogs', () => clearCachedMihomoLogs())
   ipcMain.handle('patchAppConfig', (_e, config) =>

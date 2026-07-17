@@ -50,7 +50,34 @@ function createIdleSnapshot(): GeneralTestRuntimeSnapshot {
 }
 
 let snapshot = createIdleSnapshot()
+let memoryReleased = false
 const listeners = new Set<() => void>()
+
+function hydrateMemory(): void {
+  if (!memoryReleased) return
+  persistedHistory = readTestHistory<GeneralTestHistory>(GENERAL_TEST_HISTORY_KEY)
+  snapshot = createIdleSnapshot()
+  memoryReleased = false
+}
+
+function releaseMemoryIfIdle(): void {
+  if (
+    memoryReleased ||
+    listeners.size > 0 ||
+    snapshot.delaySession.running ||
+    snapshot.downloadSession.running
+  ) {
+    return
+  }
+  persistedHistory = undefined
+  snapshot = {
+    delayMeasurements: {},
+    downloadMeasurements: {},
+    delaySession: IDLE_SESSION,
+    downloadSession: IDLE_SESSION
+  }
+  memoryReleased = true
+}
 
 function updateSnapshot(patch: Partial<GeneralTestRuntimeSnapshot>): void {
   snapshot = { ...snapshot, ...patch }
@@ -82,11 +109,16 @@ function saveHistory(): void {
 }
 
 export function subscribeGeneralTestRuntime(listener: () => void): () => void {
+  hydrateMemory()
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+    releaseMemoryIfIdle()
+  }
 }
 
 export function getGeneralTestRuntimeSnapshot(): GeneralTestRuntimeSnapshot {
+  hydrateMemory()
   return snapshot
 }
 
@@ -130,6 +162,7 @@ export function finishGeneralDelayTest(saveCompletedResult: boolean): void {
     updateSnapshot(measurementsForGroup(snapshot.groupName))
   }
   updateSnapshot({ delaySession: IDLE_SESSION })
+  releaseMemoryIfIdle()
 }
 
 export function startGeneralDownloadTest(
@@ -169,11 +202,15 @@ export function finishGeneralDownloadTest(saveCompletedResult: boolean): void {
     updateSnapshot(measurementsForGroup(snapshot.groupName))
   }
   updateSnapshot({ downloadSession: IDLE_SESSION })
+  releaseMemoryIfIdle()
 }
 
 function resetGeneralTestRuntime(): void {
+  persistedHistory = readTestHistory<GeneralTestHistory>(GENERAL_TEST_HISTORY_KEY)
   snapshot = createIdleSnapshot()
+  memoryReleased = false
   listeners.forEach((listener) => listener())
+  releaseMemoryIfIdle()
 }
 
 const unsubscribeCoreStarted = window.electron.ipcRenderer.on(

@@ -25,13 +25,16 @@ import { handleDeepLink } from './resolve/deepLink'
 import { initAppQuitLifecycle } from './resolve/appLifecycle'
 import { showNotification } from './utils/notification'
 import { appendAppLog } from './utils/log'
+import { cancelMihomoProxySpeedTest } from './core/speedTest'
+import { cancelMihomoCodexTest } from './core/codexTest'
+import { cancelMihomoCodexActualTest } from './core/codexActualTest'
+import { cancelMihomoProcessTest } from './core/processTest'
 
 export { setNotQuitDialog } from './resolve/appLifecycle'
 
 let quitTimeout: NodeJS.Timeout | null = null
 export let mainWindow: BrowserWindow | null = null
 let isCreatingWindow = false
-let windowShown = false
 let createWindowPromiseResolve: (() => void) | null = null
 let createWindowPromise: Promise<void> | null = null
 let initialWindowDisplayPromiseResolve: (() => void) | null = null
@@ -267,7 +270,6 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
         if (quitTimeout) {
           clearTimeout(quitTimeout)
         }
-        windowShown = true
         mainWindow?.show()
         mainWindow?.focusOnWebView()
         initialWindowDisplayPromiseResolve?.()
@@ -282,12 +284,15 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
       mainWindow?.webContents.reload()
     })
 
-    mainWindow.on('close', async (event) => {
-      event.preventDefault()
-      mainWindow?.hide()
-      if (windowShown) {
-        await scheduleLightweightMode()
-      }
+    mainWindow.webContents.once('destroyed', () => {
+      cancelMihomoProxySpeedTest()
+      cancelMihomoCodexTest()
+      cancelMihomoCodexActualTest()
+      cancelMihomoProcessTest()
+    })
+
+    mainWindow.on('close', () => {
+      void scheduleLightweightMode()
     })
 
     mainWindow.on('closed', () => {
@@ -346,13 +351,11 @@ export async function showMainWindow(): Promise<void> {
     }
   }
   if (mainWindow) {
-    windowShown = true
     mainWindow.show()
     mainWindow.focusOnWebView()
   } else {
     await createWindow()
     if (mainWindow !== null) {
-      windowShown = true
       ;(mainWindow as BrowserWindow).show()
       ;(mainWindow as BrowserWindow).focusOnWebView()
     }

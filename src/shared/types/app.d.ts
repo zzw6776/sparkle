@@ -97,6 +97,25 @@ interface CodexTestResult {
 
 type CodexActualTestStage = 'selecting' | 'starting' | 'requesting' | 'streaming' | 'completed'
 
+interface CodexActualTestReasoningEffortOption {
+  reasoningEffort: string
+  description: string
+}
+
+interface CodexActualTestModelOption {
+  model: string
+  displayName: string
+  description: string
+  isDefault: boolean
+  defaultReasoningEffort: string
+  supportedReasoningEfforts: CodexActualTestReasoningEffortOption[]
+}
+
+interface CodexActualTestOptions {
+  model?: string
+  reasoningEffort?: string
+}
+
 interface CodexActualTestTokenUsage {
   totalTokens: number
   inputTokens: number
@@ -122,6 +141,7 @@ interface CodexActualTestRoundResult {
   firstTokenMs?: number
   totalMs?: number
   model?: string
+  reasoningEffort?: string
   response?: string
   routes?: CodexActualTestRouteEvidence[]
   tokenUsage?: CodexActualTestTokenUsage
@@ -142,6 +162,7 @@ interface CodexActualTestResult {
   jitterMs?: number
   score?: number
   model?: string
+  reasoningEffort?: string
   tokenUsage: CodexActualTestTokenUsage
   error?: string
   roundResults: CodexActualTestRoundResult[]
@@ -150,12 +171,14 @@ interface CodexActualTestResult {
 
 interface CodexActualTestProgress {
   proxy: string
+  worker: number
   round: number
   rounds: number
   stage: CodexActualTestStage
   completed: number
   total: number
   model?: string
+  reasoningEffort?: string
   request?: string
   result?: CodexActualTestResult
 }
@@ -168,6 +191,7 @@ interface CodexActualTestLogEntry {
   level: CodexActualTestLogLevel
   message: string
   proxy?: string
+  worker?: number
   round?: number
 }
 
@@ -272,6 +296,7 @@ interface AppConfig {
   connectionGroupByProcess?: boolean
   connectionGroupSort?: 'name' | 'count' | 'upload' | 'download' | 'uploadSpeed' | 'downloadSpeed'
   connectionGroupDirection?: 'asc' | 'desc'
+  connectionPinnedProcesses?: string[]
   connectionInterval?: number
   spinFloatingIcon?: boolean
   disableTray?: boolean
@@ -346,6 +371,10 @@ interface AppConfig {
   generalTestNodeConcurrency?: number
   generalTestConfigExpanded?: boolean
   codexTestConcurrency?: number
+  codexActualTestConcurrency?: number
+  codexActualTestModel?: string
+  codexActualTestReasoningEffort?: string
+  processTestConcurrency?: number
   encryptedPassword?: number[]
   rememberProxyGroupOpenState?: boolean
   controlDns?: boolean

@@ -1,11 +1,9 @@
 import { Button, Checkbox, Tooltip, cn } from '@heroui/react'
 import {
-  memo,
   useEffect,
   useRef,
   useState,
   type ComponentProps,
-  type ReactElement,
   type ReactNode,
   type WheelEvent
 } from 'react'
@@ -84,53 +82,79 @@ export function TestResultTableViewport({
   )
 }
 
-export function TestPageControls({ children }: { children: ReactNode }): React.JSX.Element {
+interface TestResultSelectionHeaderProps {
+  selected: boolean
+  indeterminate: boolean
+  disabled?: boolean
+  label?: ReactNode
+  hint: ReactNode
+  onChange: (selected: boolean) => void
+}
+
+export function TestResultSelectionHeader({
+  selected,
+  indeterminate,
+  disabled = false,
+  label = '全选',
+  hint,
+  onChange
+}: TestResultSelectionHeaderProps): React.JSX.Element {
   return (
-    <section className="border-b border-divider p-3">
-      <div className="flex flex-col gap-4">{children}</div>
-    </section>
+    <div className="flex items-center justify-between border-b border-divider px-4 py-3">
+      <Checkbox
+        classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+        isSelected={selected}
+        isIndeterminate={indeterminate}
+        isDisabled={disabled}
+        onValueChange={onChange}
+      >
+        {label}
+      </Checkbox>
+      <span className="text-xs text-foreground-500">{hint}</span>
+    </div>
   )
 }
 
-export function TestPageControlRow({ children }: { children: ReactNode }): React.JSX.Element {
-  return <div className="flex flex-wrap items-end gap-3">{children}</div>
-}
-
 interface TestResultVirtualRowsProps {
-  items: ReactElement[]
+  items: unknown[]
   defaultItemHeight?: number
+  itemKey: (item: unknown) => React.Key
+  itemContent: (index: number, item: unknown) => ReactNode
 }
 
-/* eslint-disable react/prop-types */
-export const TestResultVirtualRows = memo<TestResultVirtualRowsProps>(
-  ({ items, defaultItemHeight = 49 }) => {
-    const hostRef = useRef<HTMLDivElement>(null)
-    const [scrollParent, setScrollParent] = useState<HTMLElement>()
+export function TestResultVirtualRows<T>({
+  items,
+  defaultItemHeight = 49,
+  itemKey,
+  itemContent
+}: Omit<TestResultVirtualRowsProps, 'items' | 'itemKey' | 'itemContent'> & {
+  items: T[]
+  itemKey: (item: T) => React.Key
+  itemContent: (index: number, item: T) => ReactNode
+}): React.JSX.Element {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [scrollParent, setScrollParent] = useState<HTMLElement>()
 
-    useEffect(() => {
-      const parent = hostRef.current?.closest<HTMLElement>('.content')
-      if (parent) setScrollParent(parent)
-    }, [])
+  useEffect(() => {
+    const parent = hostRef.current?.closest<HTMLElement>('.content')
+    if (parent) setScrollParent(parent)
+  }, [])
 
-    return (
-      <div ref={hostRef}>
-        {scrollParent && (
-          <Virtuoso
-            customScrollParent={scrollParent}
-            data={items}
-            defaultItemHeight={defaultItemHeight}
-            increaseViewportBy={{ top: 100, bottom: 250 }}
-            computeItemKey={(index, item) => item.key ?? index}
-            itemContent={(_index, item) => item}
-          />
-        )}
-      </div>
-    )
-  }
-)
-
-TestResultVirtualRows.displayName = 'TestResultVirtualRows'
-/* eslint-enable react/prop-types */
+  return (
+    <div ref={hostRef}>
+      {scrollParent && (
+        <Virtuoso
+          customScrollParent={scrollParent}
+          data={items}
+          defaultItemHeight={defaultItemHeight}
+          increaseViewportBy={{ top: 100, bottom: 250 }}
+          computeItemKey={(_index, item) => itemKey(item)}
+          itemContent={itemContent}
+        />
+      )}
+    </div>
+  )
+}
 
 interface TestResultTableGridProps {
   columnsClassName: string

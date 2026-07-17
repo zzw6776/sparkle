@@ -1,11 +1,22 @@
-import { Button, Checkbox, Chip, Input, Progress, Select, SelectItem, Switch } from '@heroui/react'
-import BasePage from '@renderer/components/base/base-page'
+import { Button, Chip, Input, Select, SelectItem, Switch } from '@heroui/react'
+import {
+  FOLLOW_TEST_GROUP,
+  TestGroupSelectors,
+  TestHistoryNotice,
+  TestNodeConcurrencySelect,
+  TestPageControlRow,
+  TestPageControls,
+  TestPageShell,
+  TestProgressBar,
+  TestRoundSelector,
+  TestRunButton,
+  parseTestInteger
+} from '@renderer/components/speed-test/test-page-controls'
 import {
   TestResultActionHeader,
   TestResultEmptyState,
   TestResultNodeCell,
-  TestPageControlRow,
-  TestPageControls,
+  TestResultSelectionHeader,
   TestResultSortHeader,
   TestResultSwitchAction,
   TestResultTableHeader,
@@ -51,7 +62,6 @@ import {
   startGeneralDownloadTest,
   subscribeGeneralTestRuntime
 } from '@renderer/utils/general-test-runtime-store'
-import { formatTestHistoryTime } from '@renderer/utils/test-history'
 import { formatLatency } from '@renderer/utils/format-latency'
 import { resolveEffectiveSpeedTestConnections } from '@renderer/utils/speed-test-config'
 import {
@@ -63,17 +73,13 @@ import {
   useState,
   useSyncExternalStore
 } from 'react'
-import { IoIosArrowBack } from 'react-icons/io'
-import { MdDownload, MdExpandLess, MdExpandMore, MdOutlineSpeed, MdStop } from 'react-icons/md'
+import { MdDownload, MdExpandLess, MdExpandMore, MdOutlineSpeed } from 'react-icons/md'
 import { useNavigate } from 'react-router-dom'
 
 type ProxyLike = ControllerProxiesDetail | ControllerGroupDetail
 type SortKey = 'name' | 'delay' | 'speed' | 'downloaded'
 type SortDirection = 'asc' | 'desc'
 
-const FOLLOW_TEST_GROUP = '__FOLLOW_TEST_GROUP__'
-const MIN_TEST_ROUNDS = 1
-const MAX_TEST_ROUNDS = 20
 const GENERAL_TABLE_COLUMNS = 'grid-cols-[minmax(180px,1.7fr)_100px_100px_130px_100px_72px]'
 
 function getProviderName(proxy: ProxyLike): string | undefined {
@@ -86,7 +92,9 @@ function clamp(value: number, min: number, max: number): number {
 
 function normalizeRounds(value?: number): number {
   if (!Number.isFinite(value)) return 3
-  return clamp(value!, MIN_TEST_ROUNDS, MAX_TEST_ROUNDS)
+  if (value! <= 1) return 1
+  if (value! <= 3) return 3
+  return 5
 }
 
 function median(values: number[]): number | undefined {
@@ -280,6 +288,9 @@ const GeneralSpeedTest: React.FC = () => {
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [rounds, setRounds] = useState(() => normalizeRounds(appConfig?.generalTestRounds))
+  const [nodeConcurrencyInput, setNodeConcurrencyInput] = useState(() =>
+    clamp(appConfig?.generalTestNodeConcurrency ?? 1, 1, 16).toString()
+  )
   const [configExpanded, setConfigExpanded] = useState(
     () => appConfig?.generalTestConfigExpanded ?? false
   )
@@ -301,14 +312,14 @@ const GeneralSpeedTest: React.FC = () => {
     speedTestDuration = 8000,
     speedTestMaxBytes = 100_000_000,
     speedTestWarmupBytes = 1_000_000,
-    speedTestConnections = 4,
-    generalTestNodeConcurrency = 1
+    speedTestConnections = 4
   } = appConfig || {}
   const effectiveSpeedTestConnections = resolveEffectiveSpeedTestConnections(
     speedTestSource,
     speedTestMaxBytes,
     speedTestConnections
   )
+  const nodeConcurrency = parseTestInteger(nodeConcurrencyInput, 1, 16)
 
   const group = groups.find((item) => item.name === groupName) || groups[0]
   const switchGroup =
@@ -356,8 +367,14 @@ const GeneralSpeedTest: React.FC = () => {
   useEffect(() => {
     if (!delaySession.running && !downloadSession.running) {
       setRounds(normalizeRounds(appConfig?.generalTestRounds))
+      setNodeConcurrencyInput(clamp(appConfig?.generalTestNodeConcurrency ?? 1, 1, 16).toString())
     }
-  }, [appConfig?.generalTestRounds, delaySession.running, downloadSession.running])
+  }, [
+    appConfig?.generalTestNodeConcurrency,
+    appConfig?.generalTestRounds,
+    delaySession.running,
+    downloadSession.running
+  ])
 
   useEffect(() => {
     if (appConfig?.generalTestConfigExpanded !== undefined) {
@@ -511,7 +528,14 @@ const GeneralSpeedTest: React.FC = () => {
   }
 
   const runDownload = async (): Promise<void> => {
-    if (!group || selectedNames.length === 0 || interactionDisabled) return
+    if (
+      !group ||
+      selectedNames.length === 0 ||
+      interactionDisabled ||
+      nodeConcurrency === undefined
+    ) {
+      return
+    }
     const names = [...selectedNames]
     let completed = 0
     let succeeded = 0
@@ -522,7 +546,7 @@ const GeneralSpeedTest: React.FC = () => {
         group.name,
         names,
         rounds,
-        generalTestNodeConcurrency,
+        nodeConcurrency,
         {
           onProxyCompleted: (proxy, round, result, error) => {
             completed++
@@ -580,40 +604,32 @@ const GeneralSpeedTest: React.FC = () => {
     [autoCloseConnection, closeMode, interactionDisabled, mutate, switchGroup, switchingProxy]
   )
 
-  const updateRounds = (value: string): void => {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) setRounds(normalizeRounds(parsed))
-  }
-
-  const renderedRows = useMemo(
-    () =>
-      rows.map((proxy) => (
-        <GeneralSpeedTestRow
-          key={proxy.name}
-          proxy={proxy}
-          delayMeasurements={delayMeasurements[proxy.name]}
-          downloadMeasurements={downloadMeasurements[proxy.name]}
-          delayTesting={delayState.testing.has(proxy.name)}
-          speedTesting={speedState.testing.has(proxy.name)}
-          speedProgress={speedState.progresses[proxy.name]}
-          selected={selected.has(proxy.name)}
-          disabled={interactionDisabled}
-          canSwitch={switchableProxyNames.has(proxy.name)}
-          isCurrent={switchGroup?.now === proxy.name}
-          isSwitching={switchingProxy === proxy.name}
-          switchBusy={Boolean(switchingProxy)}
-          switchGroupName={switchGroup?.name}
-          onSelectedChange={changeNodeSelection}
-          onSwitch={switchProxy}
-        />
-      )),
+  const renderRow = useCallback(
+    (_index: number, proxy: ProxyLike) => (
+      <GeneralSpeedTestRow
+        proxy={proxy}
+        delayMeasurements={delayMeasurements[proxy.name]}
+        downloadMeasurements={downloadMeasurements[proxy.name]}
+        delayTesting={delayState.testing.has(proxy.name)}
+        speedTesting={speedState.testing.has(proxy.name)}
+        speedProgress={speedState.progresses[proxy.name]}
+        selected={selected.has(proxy.name)}
+        disabled={interactionDisabled}
+        canSwitch={switchableProxyNames.has(proxy.name)}
+        isCurrent={switchGroup?.now === proxy.name}
+        isSwitching={switchingProxy === proxy.name}
+        switchBusy={Boolean(switchingProxy)}
+        switchGroupName={switchGroup?.name}
+        onSelectedChange={changeNodeSelection}
+        onSwitch={switchProxy}
+      />
+    ),
     [
       changeNodeSelection,
       delayMeasurements,
       delayState.testing,
       downloadMeasurements,
       interactionDisabled,
-      rows,
       selected,
       speedState.progresses,
       speedState.testing,
@@ -626,451 +642,364 @@ const GeneralSpeedTest: React.FC = () => {
   )
 
   return (
-    <BasePage
-      title="普通测速"
-      header={
-        <Button
-          size="sm"
-          isIconOnly
-          variant="light"
-          className="app-nodrag"
-          title="返回测速中心"
-          onPress={() => navigate('/speed-test')}
-        >
-          <IoIosArrowBack className="text-lg" />
-        </Button>
-      }
-    >
-      <div className="flex min-h-full w-full flex-col">
-        <TestPageControls>
-          <TestPageControlRow>
-            <Select
-              label="测试节点组"
-              size="sm"
-              className="min-w-52 flex-1"
-              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-              selectedKeys={group ? new Set([group.name]) : new Set()}
-              disallowEmptySelection
-              isDisabled={interactionDisabled || groups.length === 0}
-              onSelectionChange={(keys) => {
-                const next = keys.currentKey
-                if (next) setGroupName(String(next))
-              }}
-            >
-              {groups.map((item) => (
-                <SelectItem key={item.name}>{item.name}</SelectItem>
-              ))}
-            </Select>
+    <TestPageShell title="普通测速" onBack={() => navigate('/speed-test')}>
+      <TestPageControls>
+        <TestPageControlRow>
+          <TestGroupSelectors
+            groups={groups}
+            testGroupName={group?.name}
+            switchGroupName={switchGroupName}
+            testGroupDisabled={interactionDisabled}
+            onTestGroupChange={setGroupName}
+            onSwitchGroupChange={setSwitchGroupName}
+          />
 
-            <Select
-              label="切换目标组"
-              size="sm"
-              className="min-w-52 flex-1"
-              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-              selectedKeys={new Set([switchGroupName])}
-              disallowEmptySelection
-              isDisabled={groups.length === 0}
-              onSelectionChange={(keys) => {
-                const next = keys.currentKey
-                if (next) setSwitchGroupName(String(next))
-              }}
-            >
-              {[
-                { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
-                ...groups.map((item) => ({ key: item.name, label: item.name }))
-              ].map((item) => (
-                <SelectItem key={item.key}>{item.label}</SelectItem>
-              ))}
-            </Select>
+          <TestRoundSelector
+            value={rounds}
+            disabled={interactionDisabled}
+            onChange={(value) => {
+              setRounds(value)
+              void patchAppConfig({ generalTestRounds: value })
+            }}
+          />
+          <TestNodeConcurrencySelect
+            value={nodeConcurrencyInput}
+            disabled={interactionDisabled}
+            onValueChange={setNodeConcurrencyInput}
+            onValidBlur={(value) => void patchAppConfig({ generalTestNodeConcurrency: value })}
+          />
+          <Button
+            size="sm"
+            variant="flat"
+            className="data-[disabled=true]:opacity-100"
+            isDisabled={interactionDisabled}
+            endContent={configExpanded ? <MdExpandLess /> : <MdExpandMore />}
+            onPress={() => {
+              const next = !configExpanded
+              setConfigExpanded(next)
+              void patchAppConfig({ generalTestConfigExpanded: next })
+            }}
+          >
+            {configExpanded ? '收起配置' : '展开配置'}
+          </Button>
+        </TestPageControlRow>
 
-            <Input
-              label="测试次数"
-              type="number"
-              size="sm"
-              className="w-28"
-              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-              min={MIN_TEST_ROUNDS}
-              max={MAX_TEST_ROUNDS}
-              value={rounds.toString()}
-              isDisabled={interactionDisabled}
-              onValueChange={updateRounds}
-              onBlur={() => void patchAppConfig({ generalTestRounds: rounds })}
-            />
-            <Button
-              size="sm"
-              variant="flat"
-              className="data-[disabled=true]:opacity-100"
-              isDisabled={interactionDisabled}
-              endContent={configExpanded ? <MdExpandLess /> : <MdExpandMore />}
-              onPress={() => {
-                const next = !configExpanded
-                setConfigExpanded(next)
-                void patchAppConfig({ generalTestConfigExpanded: next })
-              }}
-            >
-              {configExpanded ? '收起配置' : '展开配置'}
-            </Button>
-          </TestPageControlRow>
-
-          {configExpanded && configContentReady && (
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-xl border border-divider/60 bg-content1 p-3">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">延迟测试配置</div>
-                    <div className="text-xs text-foreground-500">
-                      每轮并发测试，结果按中位数汇总
-                    </div>
-                  </div>
-                  <Switch
-                    size="sm"
-                    isSelected={delayTestUseGroupApi}
-                    isDisabled={interactionDisabled}
-                    onValueChange={(value) => void patchAppConfig({ delayTestUseGroupApi: value })}
-                  >
-                    组 API
-                  </Switch>
+        {configExpanded && configContentReady && (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-xl border border-divider/60 bg-content1 p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="font-medium">延迟测试配置</div>
+                  <div className="text-xs text-foreground-500">每轮并发测试，结果按中位数汇总</div>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Select
-                    label="测试地址来源"
-                    size="sm"
-                    selectedKeys={new Set([delayTestUrlScope])}
-                    disallowEmptySelection
-                    isDisabled={interactionDisabled}
-                    onSelectionChange={(keys) => {
-                      const next = keys.currentKey
-                      if (next) {
-                        void patchAppConfig({
-                          delayTestUrlScope: String(next) as 'group' | 'global'
-                        })
-                      }
-                    }}
-                  >
-                    <SelectItem key="group">使用组配置</SelectItem>
-                    <SelectItem key="global">使用统一地址</SelectItem>
-                  </Select>
-                  <Input
-                    key={`delay-url-${delayTestUrl}`}
-                    label="统一延迟地址"
-                    size="sm"
-                    className="sm:col-span-2"
-                    defaultValue={delayTestUrl}
-                    placeholder="https://www.gstatic.com/generate_204"
-                    isDisabled={interactionDisabled}
-                    onBlur={(event) =>
-                      void patchAppConfig({ delayTestUrl: event.currentTarget.value.trim() })
-                    }
-                  />
-                  <Input
-                    key={`delay-concurrency-${delayTestConcurrency}`}
-                    label="并发数"
-                    type="number"
-                    size="sm"
-                    defaultValue={delayTestConcurrency.toString()}
-                    min={MIN_DELAY_TEST_CONCURRENCY}
-                    max={MAX_DELAY_TEST_CONCURRENCY}
-                    isDisabled={interactionDisabled || delayTestUseGroupApi}
-                    onBlur={(event) =>
+                <Switch
+                  size="sm"
+                  isSelected={delayTestUseGroupApi}
+                  isDisabled={interactionDisabled}
+                  onValueChange={(value) => void patchAppConfig({ delayTestUseGroupApi: value })}
+                >
+                  组 API
+                </Switch>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Select
+                  label="测试地址来源"
+                  size="sm"
+                  selectedKeys={new Set([delayTestUrlScope])}
+                  disallowEmptySelection
+                  isDisabled={interactionDisabled}
+                  onSelectionChange={(keys) => {
+                    const next = keys.currentKey
+                    if (next) {
                       void patchAppConfig({
-                        delayTestConcurrency: normalizeDelayTestConcurrency(
-                          Number(event.currentTarget.value)
-                        )
+                        delayTestUrlScope: String(next) as 'group' | 'global'
                       })
                     }
-                  />
-                  <Input
-                    key={`delay-timeout-${delayTestTimeout}`}
-                    label="超时时间（ms）"
-                    type="number"
-                    size="sm"
-                    defaultValue={delayTestTimeout.toString()}
-                    min={100}
-                    max={60000}
-                    isDisabled={interactionDisabled}
-                    onBlur={(event) => {
-                      const value = Number(event.currentTarget.value)
-                      if (Number.isFinite(value)) {
-                        void patchAppConfig({ delayTestTimeout: clamp(value, 100, 60000) })
-                      }
-                    }}
-                  />
+                  }}
+                >
+                  <SelectItem key="group">使用组配置</SelectItem>
+                  <SelectItem key="global">使用统一地址</SelectItem>
+                </Select>
+                <Input
+                  key={`delay-url-${delayTestUrl}`}
+                  label="统一延迟地址"
+                  size="sm"
+                  className="sm:col-span-2"
+                  defaultValue={delayTestUrl}
+                  placeholder="https://www.gstatic.com/generate_204"
+                  isDisabled={interactionDisabled}
+                  onBlur={(event) =>
+                    void patchAppConfig({ delayTestUrl: event.currentTarget.value.trim() })
+                  }
+                />
+                <Input
+                  key={`delay-concurrency-${delayTestConcurrency}`}
+                  label="并发数"
+                  type="number"
+                  size="sm"
+                  defaultValue={delayTestConcurrency.toString()}
+                  min={MIN_DELAY_TEST_CONCURRENCY}
+                  max={MAX_DELAY_TEST_CONCURRENCY}
+                  isDisabled={interactionDisabled || delayTestUseGroupApi}
+                  onBlur={(event) =>
+                    void patchAppConfig({
+                      delayTestConcurrency: normalizeDelayTestConcurrency(
+                        Number(event.currentTarget.value)
+                      )
+                    })
+                  }
+                />
+                <Input
+                  key={`delay-timeout-${delayTestTimeout}`}
+                  label="超时时间（ms）"
+                  type="number"
+                  size="sm"
+                  defaultValue={delayTestTimeout.toString()}
+                  min={100}
+                  max={60000}
+                  isDisabled={interactionDisabled}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value)
+                    if (Number.isFinite(value)) {
+                      void patchAppConfig({ delayTestTimeout: clamp(value, 100, 60000) })
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-divider/60 bg-content1 p-3">
+              <div className="mb-3">
+                <div className="font-medium">下载测速配置</div>
+                <div className="text-xs text-foreground-500">
+                  单节点多连接可跑满带宽；节点并发大于 1 会共享总带宽
                 </div>
               </div>
-
-              <div className="rounded-xl border border-divider/60 bg-content1 p-3">
-                <div className="mb-3">
-                  <div className="font-medium">下载测速配置</div>
-                  <div className="text-xs text-foreground-500">
-                    单节点多连接可跑满带宽；节点并发大于 1 会共享总带宽
-                  </div>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Select
-                    label="下载源"
-                    size="sm"
-                    selectedKeys={new Set([speedTestSource])}
-                    disallowEmptySelection
-                    isDisabled={interactionDisabled}
-                    onSelectionChange={(keys) => {
-                      const next = keys.currentKey
-                      if (next) {
-                        void patchAppConfig({ speedTestSource: String(next) as SpeedTestSource })
-                      }
-                    }}
-                  >
-                    <SelectItem key="cloudflare">Cloudflare</SelectItem>
-                    <SelectItem key="telegram">Telegram</SelectItem>
-                    <SelectItem key="custom">自定义地址</SelectItem>
-                  </Select>
-                  {speedTestSource === 'custom' && (
-                    <Input
-                      key={`speed-url-${speedTestUrl}`}
-                      label="自定义下载地址"
-                      size="sm"
-                      className="sm:col-span-2"
-                      defaultValue={speedTestUrl}
-                      placeholder="支持 {bytes} 文件大小占位符"
-                      isDisabled={interactionDisabled}
-                      onBlur={(event) =>
-                        void patchAppConfig({ speedTestUrl: event.currentTarget.value.trim() })
-                      }
-                    />
-                  )}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Select
+                  label="下载源"
+                  size="sm"
+                  selectedKeys={new Set([speedTestSource])}
+                  disallowEmptySelection
+                  isDisabled={interactionDisabled}
+                  onSelectionChange={(keys) => {
+                    const next = keys.currentKey
+                    if (next) {
+                      void patchAppConfig({ speedTestSource: String(next) as SpeedTestSource })
+                    }
+                  }}
+                >
+                  <SelectItem key="cloudflare">Cloudflare</SelectItem>
+                  <SelectItem key="telegram">Telegram</SelectItem>
+                  <SelectItem key="custom">自定义地址</SelectItem>
+                </Select>
+                {speedTestSource === 'custom' && (
                   <Input
-                    key={`speed-duration-${speedTestDuration}`}
-                    label="最长时间（ms）"
-                    type="number"
+                    key={`speed-url-${speedTestUrl}`}
+                    label="自定义下载地址"
                     size="sm"
-                    defaultValue={speedTestDuration.toString()}
-                    min={1000}
-                    max={30000}
+                    className="sm:col-span-2"
+                    defaultValue={speedTestUrl}
+                    placeholder="支持 {bytes} 文件大小占位符"
                     isDisabled={interactionDisabled}
-                    onBlur={(event) => {
-                      const value = Number(event.currentTarget.value)
-                      if (Number.isFinite(value)) {
-                        void patchAppConfig({ speedTestDuration: clamp(value, 1000, 30000) })
-                      }
-                    }}
+                    onBlur={(event) =>
+                      void patchAppConfig({ speedTestUrl: event.currentTarget.value.trim() })
+                    }
                   />
-                  <Input
-                    key={`speed-max-${speedTestMaxBytes}`}
-                    label="最大流量（MB）"
-                    type="number"
-                    size="sm"
-                    defaultValue={Math.round(speedTestMaxBytes / 1_000_000).toString()}
-                    min={2}
-                    max={1000}
-                    isDisabled={interactionDisabled}
-                    onBlur={(event) => {
-                      const value = Number(event.currentTarget.value)
-                      if (Number.isFinite(value)) {
-                        void patchAppConfig({
-                          speedTestMaxBytes: clamp(value, 2, 1000) * 1_000_000
-                        })
-                      }
-                    }}
-                  />
-                  <Input
-                    key={`speed-warmup-${speedTestWarmupBytes}`}
-                    label="预热流量（MB）"
-                    type="number"
-                    size="sm"
-                    defaultValue={(speedTestWarmupBytes / 1_000_000).toString()}
-                    min={0}
-                    max={Math.max(0, Math.floor(speedTestMaxBytes / 1_000_000) - 1)}
-                    isDisabled={interactionDisabled}
-                    onBlur={(event) => {
-                      const value = Number(event.currentTarget.value)
-                      if (Number.isFinite(value)) {
-                        void patchAppConfig({
-                          speedTestWarmupBytes:
-                            clamp(
-                              value,
-                              0,
-                              Math.max(0, Math.floor(speedTestMaxBytes / 1_000_000) - 1)
-                            ) * 1_000_000
-                        })
-                      }
-                    }}
-                  />
-                  <Input
-                    key={`speed-connections-${speedTestConnections}`}
-                    label={`单节点连接数（配置 ${speedTestConnections} / 实际 ${effectiveSpeedTestConnections}）`}
-                    type="number"
-                    size="sm"
-                    defaultValue={speedTestConnections.toString()}
-                    min={1}
-                    max={16}
-                    isDisabled={interactionDisabled}
-                    onBlur={(event) => {
-                      const value = Number(event.currentTarget.value)
-                      if (Number.isFinite(value)) {
-                        void patchAppConfig({ speedTestConnections: clamp(value, 1, 16) })
-                      }
-                    }}
-                  />
-                  <Input
-                    key={`node-concurrency-${generalTestNodeConcurrency}`}
-                    label="节点并发数"
-                    type="number"
-                    size="sm"
-                    defaultValue={generalTestNodeConcurrency.toString()}
-                    min={1}
-                    max={16}
-                    isDisabled={interactionDisabled}
-                    onBlur={(event) => {
-                      const value = Number(event.currentTarget.value)
-                      if (Number.isFinite(value)) {
-                        void patchAppConfig({
-                          generalTestNodeConcurrency: clamp(value, 1, 16)
-                        })
-                      }
-                    }}
-                  />
-                </div>
-                {generalTestNodeConcurrency > 1 && (
-                  <div className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning-700 dark:text-warning-400">
-                    当前同时测试 {generalTestNodeConcurrency}{' '}
-                    个节点，各节点会争抢本机总带宽；适合快速筛选，不适合精确比较峰值速度。
-                  </div>
                 )}
+                <Input
+                  key={`speed-duration-${speedTestDuration}`}
+                  label="最长时间（ms）"
+                  type="number"
+                  size="sm"
+                  defaultValue={speedTestDuration.toString()}
+                  min={1000}
+                  max={30000}
+                  isDisabled={interactionDisabled}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value)
+                    if (Number.isFinite(value)) {
+                      void patchAppConfig({ speedTestDuration: clamp(value, 1000, 30000) })
+                    }
+                  }}
+                />
+                <Input
+                  key={`speed-max-${speedTestMaxBytes}`}
+                  label="最大流量（MB）"
+                  type="number"
+                  size="sm"
+                  defaultValue={Math.round(speedTestMaxBytes / 1_000_000).toString()}
+                  min={2}
+                  max={1000}
+                  isDisabled={interactionDisabled}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value)
+                    if (Number.isFinite(value)) {
+                      void patchAppConfig({
+                        speedTestMaxBytes: clamp(value, 2, 1000) * 1_000_000
+                      })
+                    }
+                  }}
+                />
+                <Input
+                  key={`speed-warmup-${speedTestWarmupBytes}`}
+                  label="预热流量（MB）"
+                  type="number"
+                  size="sm"
+                  defaultValue={(speedTestWarmupBytes / 1_000_000).toString()}
+                  min={0}
+                  max={Math.max(0, Math.floor(speedTestMaxBytes / 1_000_000) - 1)}
+                  isDisabled={interactionDisabled}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value)
+                    if (Number.isFinite(value)) {
+                      void patchAppConfig({
+                        speedTestWarmupBytes:
+                          clamp(
+                            value,
+                            0,
+                            Math.max(0, Math.floor(speedTestMaxBytes / 1_000_000) - 1)
+                          ) * 1_000_000
+                      })
+                    }
+                  }}
+                />
+                <Input
+                  key={`speed-connections-${speedTestConnections}`}
+                  label={`单节点连接数（配置 ${speedTestConnections} / 实际 ${effectiveSpeedTestConnections}）`}
+                  type="number"
+                  size="sm"
+                  defaultValue={speedTestConnections.toString()}
+                  min={1}
+                  max={16}
+                  isDisabled={interactionDisabled}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value)
+                    if (Number.isFinite(value)) {
+                      void patchAppConfig({ speedTestConnections: clamp(value, 1, 16) })
+                    }
+                  }}
+                />
               </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              color={delaySession.running ? 'danger' : 'primary'}
-              variant="solid"
-              isDisabled={
-                !delaySession.running &&
-                (selectedNames.length === 0 ||
-                  downloadSession.running ||
-                  anotherDelayRunning ||
-                  anotherDownloadRunning)
-              }
-              startContent={delaySession.running ? <MdStop /> : <MdOutlineSpeed />}
-              onPress={() => void (delaySession.running ? stopDelay() : runDelay())}
-            >
-              {delaySession.running
-                ? '停止延迟测速'
-                : `测试延迟（${selectedNames.length} × ${rounds}）`}
-            </Button>
-            <Button
-              color={downloadSession.running ? 'danger' : 'primary'}
-              variant="solid"
-              isDisabled={
-                delaySession.running ||
-                anotherDelayRunning ||
-                (!downloadSession.running && (selectedNames.length === 0 || anotherDownloadRunning))
-              }
-              startContent={downloadSession.running ? <MdStop /> : <MdDownload />}
-              onPress={() => void (downloadSession.running ? stopDownload() : runDownload())}
-            >
-              {downloadSession.running
-                ? '停止下载测速'
-                : `下载测速（${selectedNames.length} × ${rounds}）`}
-            </Button>
-            <span className="text-xs text-foreground-500">
-              延迟地址：
-              {delayTestUrlScope === 'group'
-                ? group?.testUrl || '节点组默认地址'
-                : delayTestUrl || '默认地址'}
-              {' · '}下载源：{sourceName(speedTestSource)}
-            </span>
-          </div>
-
-          {history?.savedAt && history.groupName === group?.name && !interactionDisabled && (
-            <div className="text-xs text-foreground-500">
-              已恢复上次测试结果 · {formatTestHistoryTime(history.savedAt)}
-            </div>
-          )}
-
-          {delaySession.running && (
-            <div>
-              <div className="mb-1 flex justify-between text-xs">
-                <span>
-                  延迟测试第 {delaySession.round}/{delaySession.rounds} 轮
-                </span>
-                <span>
-                  {delayCompleted}/{delaySession.nodeCount * delaySession.rounds}
-                </span>
-              </div>
-              <Progress
-                aria-label="延迟测试进度"
-                value={(delayCompleted / (delaySession.nodeCount * delaySession.rounds)) * 100}
-                color="primary"
-              />
-            </div>
-          )}
-
-          {downloadSession.running && (
-            <div>
-              <div className="mb-1 flex justify-between gap-3 text-xs">
-                <span className="flag-emoji truncate">
-                  下载测速第 {downloadSession.round}/{downloadSession.rounds} 轮
-                  {speedState.testing.size > 0
-                    ? `：正在并发 ${speedState.testing.size} 个节点`
-                    : ''}
-                </span>
-                <span className="shrink-0">
-                  {downloadCompleted}/{downloadSession.nodeCount * downloadSession.rounds}
-                  {activeDownloadSpeed > 0 ? ` · 合计 ${formatSpeed(activeDownloadSpeed)}` : ''}
-                </span>
-              </div>
-              <Progress
-                aria-label="下载测速进度"
-                value={
-                  ((downloadCompleted + activeDownloadFractions) /
-                    (downloadSession.nodeCount * downloadSession.rounds)) *
-                  100
-                }
-                color="secondary"
-              />
-            </div>
-          )}
-        </TestPageControls>
-
-        <section className="min-h-0 flex-1">
-          <div>
-            <div className="flex items-center justify-between border-b border-divider px-4 py-3">
-              <Checkbox
-                classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                isSelected={allSelected}
-                isIndeterminate={selectedNames.length > 0 && !allSelected}
-                isDisabled={interactionDisabled || proxies.length === 0}
-                onValueChange={(checked) => {
-                  setSelected(checked ? new Set(proxies.map((proxy) => proxy.name)) : new Set())
-                }}
-              >
-                全选
-              </Checkbox>
-              <span className="text-xs text-foreground-500">
-                已选择 {selectedNames.length}/{proxies.length} 个节点；表格主值为成功轮次中位数
-              </span>
-            </div>
-
-            <TestResultTableViewport minWidthClassName="min-w-190">
-              <TestResultTableHeader columnsClassName={GENERAL_TABLE_COLUMNS}>
-                {sortHeader('name', '节点')}
-                <span className="flex h-6 items-center">类型</span>
-                {sortHeader('delay', '延迟')}
-                {sortHeader('speed', '下载速度')}
-                {sortHeader('downloaded', '下载量')}
-                <TestResultActionHeader />
-              </TestResultTableHeader>
-
-              {rows.length === 0 ? (
-                <TestResultEmptyState />
-              ) : (
-                <TestResultVirtualRows items={renderedRows} />
+              {(nodeConcurrency ?? 0) > 1 && (
+                <div className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning-700 dark:text-warning-400">
+                  当前同时测试 {nodeConcurrency}{' '}
+                  个节点，各节点会争抢本机总带宽；适合快速筛选，不适合精确比较峰值速度。
+                </div>
               )}
-            </TestResultTableViewport>
+            </div>
           </div>
-        </section>
-      </div>
-    </BasePage>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <TestRunButton
+            running={delaySession.running}
+            disabled={
+              !delaySession.running &&
+              (selectedNames.length === 0 ||
+                downloadSession.running ||
+                anotherDelayRunning ||
+                anotherDownloadRunning)
+            }
+            startLabel={`测试延迟（${selectedNames.length} × ${rounds}）`}
+            stopLabel="停止延迟测速"
+            startContent={<MdOutlineSpeed />}
+            onStart={runDelay}
+            onStop={stopDelay}
+          />
+          <TestRunButton
+            running={downloadSession.running}
+            disabled={
+              delaySession.running ||
+              anotherDelayRunning ||
+              (!downloadSession.running &&
+                (selectedNames.length === 0 ||
+                  anotherDownloadRunning ||
+                  nodeConcurrency === undefined))
+            }
+            startLabel={`下载测速（${selectedNames.length} × ${rounds}）`}
+            stopLabel="停止下载测速"
+            startContent={<MdDownload />}
+            onStart={runDownload}
+            onStop={stopDownload}
+          />
+          <span className="text-xs text-foreground-500">
+            延迟地址：
+            {delayTestUrlScope === 'group'
+              ? group?.testUrl || '节点组默认地址'
+              : delayTestUrl || '默认地址'}
+            {' · '}下载源：{sourceName(speedTestSource)}
+          </span>
+        </div>
+
+        <TestHistoryNotice
+          savedAt={history?.savedAt}
+          visible={history?.groupName === group?.name && !interactionDisabled}
+        />
+
+        {delaySession.running && (
+          <TestProgressBar
+            label={`延迟测试第 ${delaySession.round}/${delaySession.rounds} 轮`}
+            detail={`${delayCompleted}/${delaySession.nodeCount * delaySession.rounds}`}
+            value={(delayCompleted / (delaySession.nodeCount * delaySession.rounds)) * 100}
+            ariaLabel="延迟测试进度"
+          />
+        )}
+
+        {downloadSession.running && (
+          <TestProgressBar
+            label={`下载测速第 ${downloadSession.round}/${downloadSession.rounds} 轮${
+              speedState.testing.size > 0 ? `：正在并发 ${speedState.testing.size} 个节点` : ''
+            }`}
+            detail={`${downloadCompleted}/${downloadSession.nodeCount * downloadSession.rounds}${
+              activeDownloadSpeed > 0 ? ` · 合计 ${formatSpeed(activeDownloadSpeed)}` : ''
+            }`}
+            value={
+              ((downloadCompleted + activeDownloadFractions) /
+                (downloadSession.nodeCount * downloadSession.rounds)) *
+              100
+            }
+            ariaLabel="下载测速进度"
+            color="secondary"
+          />
+        )}
+      </TestPageControls>
+
+      <section className="min-h-0 flex-1">
+        <div>
+          <TestResultSelectionHeader
+            selected={allSelected}
+            indeterminate={selectedNames.length > 0 && !allSelected}
+            disabled={interactionDisabled || proxies.length === 0}
+            hint={`已选择 ${selectedNames.length}/${proxies.length} 个节点；表格主值为成功轮次中位数`}
+            onChange={(checked) => {
+              setSelected(checked ? new Set(proxies.map((proxy) => proxy.name)) : new Set())
+            }}
+          />
+
+          <TestResultTableViewport minWidthClassName="min-w-190">
+            <TestResultTableHeader columnsClassName={GENERAL_TABLE_COLUMNS}>
+              {sortHeader('name', '节点')}
+              <span className="flex h-6 items-center">类型</span>
+              {sortHeader('delay', '延迟')}
+              {sortHeader('speed', '下载速度')}
+              {sortHeader('downloaded', '下载量')}
+              <TestResultActionHeader />
+            </TestResultTableHeader>
+
+            {rows.length === 0 ? (
+              <TestResultEmptyState />
+            ) : (
+              <TestResultVirtualRows
+                items={rows}
+                itemKey={(proxy) => proxy.name}
+                itemContent={renderRow}
+              />
+            )}
+          </TestResultTableViewport>
+        </div>
+      </section>
+    </TestPageShell>
   )
 }
 

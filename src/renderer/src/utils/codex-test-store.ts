@@ -39,12 +39,28 @@ const initialSnapshot: CodexTestStoreSnapshot = {
 }
 
 let snapshot = initialSnapshot
+let memoryReleased = false
 let generation = 0
 const listeners = new Set<() => void>()
 let pendingProgress: CodexTestProgress | undefined
 let pendingResults: Record<string, CodexTestResult> = {}
 let progressTimer: number | undefined
 let progressFlushInterval = 100
+
+function hydrateMemory(): void {
+  if (!memoryReleased) return
+  persistedHistory = readTestHistory<PersistedCodexTestHistory>(CODEX_TEST_HISTORY_KEY)
+  snapshot = createIdleSnapshot()
+  memoryReleased = false
+}
+
+function releaseMemoryIfIdle(): void {
+  if (memoryReleased || listeners.size > 0 || snapshot.testing) return
+  clearPendingProgress()
+  persistedHistory = undefined
+  snapshot = { results: {}, testing: false, cancelling: false }
+  memoryReleased = true
+}
 
 function updateSnapshot(patch: Partial<CodexTestStoreSnapshot>): void {
   snapshot = { ...snapshot, ...patch }
@@ -77,11 +93,16 @@ function clearPendingProgress(): void {
 }
 
 export function subscribeCodexTestStore(listener: () => void): () => void {
+  hydrateMemory()
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+    releaseMemoryIfIdle()
+  }
 }
 
 export function getCodexTestSnapshot(): CodexTestStoreSnapshot {
+  hydrateMemory()
   return snapshot
 }
 
@@ -143,6 +164,7 @@ export async function runCodexTest(
   } finally {
     if (currentGeneration === generation) {
       updateSnapshot({ testing: false, cancelling: false, progress: undefined })
+      releaseMemoryIfIdle()
     }
   }
 }
@@ -161,8 +183,11 @@ function resetCodexTestStore(): void {
   generation++
   clearPendingProgress()
   if (snapshot.testing) void cancelMihomoCodexTest()
+  persistedHistory = readTestHistory<PersistedCodexTestHistory>(CODEX_TEST_HISTORY_KEY)
   snapshot = createIdleSnapshot()
+  memoryReleased = false
   listeners.forEach((listener) => listener())
+  releaseMemoryIfIdle()
 }
 
 const unsubscribeProgress = window.electron.ipcRenderer.on(

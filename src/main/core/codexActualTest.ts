@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import readline from 'node:readline'
@@ -14,6 +14,38 @@ const REQUEST_TIMEOUT = 60_000
 const RPC_TIMEOUT = 30_000
 const MAX_ACTUAL_CONCURRENCY = 4
 const ROUTE_CHECK_INTERVAL = 100
+const CODEX_ACTUAL_TEST_DISABLED_FEATURES = [
+  'apps',
+  'auth_elicitation',
+  'browser_use',
+  'browser_use_external',
+  'browser_use_full_cdp_access',
+  'code_mode_host',
+  'computer_use',
+  'goals',
+  'hooks',
+  'image_generation',
+  'in_app_browser',
+  'memories',
+  'multi_agent',
+  'personality',
+  'plugin_sharing',
+  'plugins',
+  'remote_plugin',
+  'shell_snapshot',
+  'shell_tool',
+  'skill_mcp_dependency_install',
+  'skill_search',
+  'tool_call_mcp_elicitation',
+  'tool_suggest',
+  'unified_exec',
+  'workspace_dependencies'
+] as const
+const CODEX_ACTUAL_TEST_CONFIG_OVERRIDES = [
+  'project_doc_max_bytes=0',
+  'web_search="disabled"',
+  'tools.view_image=false'
+] as const
 
 type JsonObject = Record<string, unknown>
 type TestChannel = ReturnType<typeof getRuntimeCodexTestChannels>[number]
@@ -33,6 +65,19 @@ interface TurnStartResponse {
   turn: { id: string }
 }
 
+interface ModelListResponse {
+  data: Array<{
+    model: string
+    displayName: string
+    description: string
+    hidden: boolean
+    isDefault: boolean
+    defaultReasoningEffort: string
+    supportedReasoningEfforts: CodexActualTestReasoningEffortOption[]
+  }>
+  nextCursor?: string | null
+}
+
 interface ActiveCodexActualTest {
   controller: AbortController
   clients: Set<CodexAppServerClient>
@@ -45,6 +90,8 @@ interface RouteMonitor {
 
 let activeCodexActualTest: ActiveCodexActualTest | undefined
 let resolvedCodexBinary: string | undefined
+let cachedModelList:
+  { binary: string; expiresAt: number; models: CodexActualTestModelOption[] } | undefined
 
 interface CodexProbeResult {
   available: boolean
@@ -190,6 +237,7 @@ function aggregateResult(
     jitterMs: jitterMs === undefined ? undefined : roundMetric(jitterMs),
     score: score === undefined ? undefined : roundMetric(score),
     model: successful.find((round) => round.model)?.model,
+    reasoningEffort: successful.find((round) => round.reasoningEffort)?.reasoningEffort,
     tokenUsage: roundResults.reduce(
       (usage, round) => addTokenUsage(usage, round.tokenUsage),
       emptyTokenUsage()
@@ -275,6 +323,35 @@ async function resolveCodexBinary(): Promise<string> {
   )
 }
 
+function codexActualTestAppServerArgs(): string[] {
+  return [
+    'app-server',
+    '--listen',
+    'stdio://',
+    ...CODEX_ACTUAL_TEST_CONFIG_OVERRIDES.flatMap((override) => ['-c', override]),
+    ...CODEX_ACTUAL_TEST_DISABLED_FEATURES.flatMap((feature) => ['--disable', feature])
+  ]
+}
+
+async function createIsolatedCodexHome(): Promise<string> {
+  const isolatedHome = await mkdtemp(path.join(tmpdir(), 'sparkle-codex-home-'))
+  const sourceHome = process.env.CODEX_HOME?.trim() || path.join(homedir(), '.codex')
+  try {
+    await copyFile(path.join(sourceHome, 'auth.json'), path.join(isolatedHome, 'auth.json'))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      await rm(isolatedHome, { recursive: true, force: true }).catch(() => {})
+      throw error
+    }
+  }
+  await writeFile(
+    path.join(isolatedHome, 'config.toml'),
+    'project_doc_max_bytes = 0\nweb_search = "disabled"\n\n[tools]\nview_image = false\n',
+    { mode: 0o600 }
+  )
+  return isolatedHome
+}
+
 class CodexAppServerClient {
   private child?: ChildProcessWithoutNullStreams
   private lineReader?: readline.Interface
@@ -284,6 +361,7 @@ class CodexAppServerClient {
   private failureListeners = new Set<(error: Error) => void>()
   private stderr = ''
   private stopped = false
+  private isolatedHome?: string
 
   constructor(
     private readonly binary: string,
@@ -295,21 +373,34 @@ class CodexAppServerClient {
     if (this.child) return
     if (this.signal.aborted) throw abortError()
     const proxyUrl = `http://127.0.0.1:${this.proxyPort}`
-    const child = spawn(this.binary, ['app-server', '--listen', 'stdio://'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: codexBinaryNeedsShell(this.binary),
-      env: {
-        ...process.env,
-        HTTP_PROXY: proxyUrl,
-        HTTPS_PROXY: proxyUrl,
-        ALL_PROXY: proxyUrl,
-        http_proxy: proxyUrl,
-        https_proxy: proxyUrl,
-        all_proxy: proxyUrl,
-        NO_PROXY: '127.0.0.1,localhost,::1',
-        no_proxy: '127.0.0.1,localhost,::1'
-      }
-    })
+    const isolatedHome = await createIsolatedCodexHome()
+    this.isolatedHome = isolatedHome
+    if (this.signal.aborted) {
+      this.cleanupIsolatedHome()
+      throw abortError()
+    }
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawn(this.binary, codexActualTestAppServerArgs(), {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: codexBinaryNeedsShell(this.binary),
+        env: {
+          ...process.env,
+          CODEX_HOME: isolatedHome,
+          HTTP_PROXY: proxyUrl,
+          HTTPS_PROXY: proxyUrl,
+          ALL_PROXY: proxyUrl,
+          http_proxy: proxyUrl,
+          https_proxy: proxyUrl,
+          all_proxy: proxyUrl,
+          NO_PROXY: '127.0.0.1,localhost,::1',
+          no_proxy: '127.0.0.1,localhost,::1'
+        }
+      })
+    } catch (error) {
+      this.cleanupIsolatedHome()
+      throw error
+    }
     this.child = child
     this.lineReader = readline.createInterface({ input: child.stdout })
     this.lineReader.on('line', (line) => this.handleLine(line))
@@ -318,6 +409,7 @@ class CodexAppServerClient {
     })
     child.once('error', (error) => this.handleExit(error))
     child.once('exit', (code, signal) => {
+      this.cleanupIsolatedHome()
       if (this.stopped) return
       const detail = this.stderr.trim()
       this.handleExit(
@@ -382,7 +474,16 @@ class CodexAppServerClient {
         terminateChildProcess(child, true)
       }, 1000)
       forceTimer.unref()
+    } else {
+      this.cleanupIsolatedHome()
     }
+  }
+
+  private cleanupIsolatedHome(): void {
+    const isolatedHome = this.isolatedHome
+    if (!isolatedHome) return
+    this.isolatedHome = undefined
+    void rm(isolatedHome, { recursive: true, force: true }).catch(() => {})
   }
 
   private send(message: JsonObject): void {
@@ -428,6 +529,7 @@ class CodexAppServerClient {
     this.rejectPending(error)
     this.failureListeners.forEach((listener) => listener(error))
     this.failureListeners.clear()
+    this.cleanupIsolatedHome()
   }
 
   private rejectPending(error: Error): void {
@@ -505,15 +607,16 @@ async function runActualProbe(
   client: CodexAppServerClient,
   channel: TestChannel,
   round: number,
+  options: CodexActualTestOptions,
   signal: AbortSignal,
   onStage: (
     stage: CodexActualTestStage,
-    detail?: Pick<CodexActualTestProgress, 'model' | 'request'>
+    detail?: Pick<CodexActualTestProgress, 'model' | 'reasoningEffort' | 'request'>
   ) => void
 ): Promise<CodexActualTestRoundResult> {
   const workDir = await mkdtemp(path.join(tmpdir(), 'sparkle-codex-test-'))
   const nonce = `SPARKLE_OK_${randomBytes(8).toString('hex')}`
-  const requestText = `只回复 ${nonce}`
+  const requestText = nonce
   let routeMonitor: RouteMonitor | undefined
   let unsubscribe = (): void => {}
   let unsubscribeFailure = (): void => {}
@@ -536,8 +639,8 @@ async function runActualProbe(
       sandbox: 'read-only',
       ephemeral: true,
       config: { web_search: 'disabled' },
-      developerInstructions:
-        'This is a network latency benchmark. Do not call tools, inspect files, or add explanations. Return only the exact token requested by the user.'
+      baseInstructions: "Echo the user's text exactly. Do not use tools.",
+      model: options.model
     })
     const threadId = thread.thread.id
     model = thread.model
@@ -617,12 +720,18 @@ async function runActualProbe(
     })
 
     requestStartedAt = performance.now()
-    onStage('requesting', { model, request: requestText })
+    onStage('requesting', {
+      model,
+      reasoningEffort: options.reasoningEffort,
+      request: requestText
+    })
     const turn = await client.request<TurnStartResponse>('turn/start', {
       threadId,
       input: [{ type: 'text', text: requestText, text_elements: [] }],
       approvalPolicy: 'never',
-      model
+      model,
+      effort: options.reasoningEffort,
+      summary: 'none'
     })
     turnId = turn.turn.id
 
@@ -656,6 +765,7 @@ async function runActualProbe(
       firstTokenMs: firstTokenMs === undefined ? undefined : roundMetric(firstTokenMs),
       totalMs: roundMetric(totalMs),
       model,
+      reasoningEffort: options.reasoningEffort,
       response: cleanResponse,
       routes,
       tokenUsage,
@@ -680,6 +790,7 @@ async function runActualProbe(
           : undefined,
       totalMs: requestStartedAt === undefined ? undefined : roundMetric(now - requestStartedAt),
       model,
+      reasoningEffort: options.reasoningEffort,
       response: response.trim().slice(0, 500) || undefined,
       routes,
       tokenUsage,
@@ -702,10 +813,64 @@ export function cancelMihomoCodexActualTest(): boolean {
   return true
 }
 
+export async function listCodexActualTestModels(): Promise<CodexActualTestModelOption[]> {
+  const binary = await resolveCodexBinary()
+  if (cachedModelList?.binary === binary && cachedModelList.expiresAt > Date.now()) {
+    return cachedModelList.models
+  }
+  if (activeCodexActualTest) {
+    if (cachedModelList?.binary === binary) return cachedModelList.models
+    throw new Error('真实响应测试进行中，暂时无法读取模型列表')
+  }
+
+  const channel = getRuntimeCodexTestChannels()[0]
+  if (!channel) throw new Error('Codex 测试通道不可用，请重启内核后重试')
+  const controller = new AbortController()
+  const client = new CodexAppServerClient(binary, channel.port, controller.signal)
+  try {
+    await client.start()
+    const models: CodexActualTestModelOption[] = []
+    let cursor: string | undefined
+    do {
+      const response = await client.request<ModelListResponse>('model/list', {
+        cursor,
+        includeHidden: false,
+        limit: 100
+      })
+      response.data
+        .filter((model) => !model.hidden && model.model.trim())
+        .forEach((model) => {
+          models.push({
+            model: model.model,
+            displayName: model.displayName || model.model,
+            description: model.description || '',
+            isDefault: model.isDefault,
+            defaultReasoningEffort: model.defaultReasoningEffort,
+            supportedReasoningEfforts: model.supportedReasoningEfforts || []
+          })
+        })
+      cursor = response.nextCursor || undefined
+    } while (cursor)
+
+    const uniqueModels = [...new Map(models.map((model) => [model.model, model])).values()]
+    if (uniqueModels.length === 0) throw new Error('Codex 未返回可用模型')
+    cachedModelList = {
+      binary,
+      expiresAt: Date.now() + 10 * 60_000,
+      models: uniqueModels
+    }
+    return uniqueModels
+  } finally {
+    client.stop()
+    controller.abort()
+  }
+}
+
 export async function mihomoCodexActualTest(
   proxies: string[],
   rounds: number,
   concurrency: number,
+  options: CodexActualTestOptions = {},
   onProgress?: (progress: CodexActualTestProgress) => void
 ): Promise<CodexActualTestResult[]> {
   const uniqueProxies = [...new Set(proxies.map((proxy) => proxy.trim()).filter(Boolean))]
@@ -742,10 +907,16 @@ export async function mihomoCodexActualTest(
   }
 
   try {
-    const runSample = async (proxy: string, round: number, channel: TestChannel): Promise<void> => {
+    const runSample = async (
+      proxy: string,
+      round: number,
+      channel: TestChannel,
+      worker: number
+    ): Promise<void> => {
       if (current.cancelled || current.controller.signal.aborted) throw abortError()
       onProgress?.({
         proxy,
+        worker,
         round,
         rounds: normalizedRounds,
         stage: 'selecting',
@@ -767,6 +938,7 @@ export async function mihomoCodexActualTest(
         completed++
         onProgress?.({
           proxy,
+          worker,
           round,
           rounds: normalizedRounds,
           stage: 'completed',
@@ -781,10 +953,12 @@ export async function mihomoCodexActualTest(
         client,
         channel,
         round,
+        options,
         current.controller.signal,
         (stage, detail) =>
           onProgress?.({
             proxy,
+            worker,
             round,
             rounds: normalizedRounds,
             stage,
@@ -797,6 +971,7 @@ export async function mihomoCodexActualTest(
       completed++
       onProgress?.({
         proxy,
+        worker,
         round,
         rounds: normalizedRounds,
         stage: 'completed',
@@ -815,10 +990,10 @@ export async function mihomoCodexActualTest(
     for (let round = 1; round <= normalizedRounds; round++) {
       let nextProxyIndex = 0
       await Promise.all(
-        channels.slice(0, normalizedConcurrency).map(async (channel) => {
+        channels.slice(0, normalizedConcurrency).map(async (channel, workerIndex) => {
           while (nextProxyIndex < uniqueProxies.length) {
             const proxyIndex = nextProxyIndex++
-            await runSample(uniqueProxies[proxyIndex], round, channel)
+            await runSample(uniqueProxies[proxyIndex], round, channel, workerIndex + 1)
           }
         })
       )

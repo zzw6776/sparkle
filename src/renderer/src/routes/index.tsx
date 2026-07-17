@@ -1,94 +1,116 @@
 import { Navigate } from 'react-router-dom'
-import Override from '@renderer/pages/override'
-import Proxies from '@renderer/pages/proxies'
-import Rules from '@renderer/pages/rules'
-import Settings from '@renderer/pages/settings'
-import Profiles from '@renderer/pages/profiles'
-import Logs from '@renderer/pages/logs'
-import Connections from '@renderer/pages/connections'
-import Mihomo from '@renderer/pages/mihomo'
-import Sysproxy from '@renderer/pages/syspeoxy'
-import Tun from '@renderer/pages/tun'
-import Resources from '@renderer/pages/resources'
-import DNS from '@renderer/pages/dns'
-import Sniffer from '@renderer/pages/sniffer'
-import SubStore from '@renderer/pages/substore'
-import SpeedTest from '@renderer/pages/speed-test'
-import CodexTest from '@renderer/pages/codex-test'
-import GeneralSpeedTest from '@renderer/pages/general-speed-test'
-import ProcessTest from '@renderer/pages/process-test'
+import {
+  lazy,
+  Suspense,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactElement
+} from 'react'
+
+const Override = lazy(() => import('@renderer/pages/override'))
+const Proxies = lazy(() => import('@renderer/pages/proxies'))
+const Rules = lazy(() => import('@renderer/pages/rules'))
+const Settings = lazy(() => import('@renderer/pages/settings'))
+const Profiles = lazy(() => import('@renderer/pages/profiles'))
+const Logs = lazy(() => import('@renderer/pages/logs'))
+const Connections = lazy(() => import('@renderer/pages/connections'))
+const Mihomo = lazy(() => import('@renderer/pages/mihomo'))
+const Sysproxy = lazy(() => import('@renderer/pages/syspeoxy'))
+const Tun = lazy(() => import('@renderer/pages/tun'))
+const Resources = lazy(() => import('@renderer/pages/resources'))
+const DNS = lazy(() => import('@renderer/pages/dns'))
+const Sniffer = lazy(() => import('@renderer/pages/sniffer'))
+const SubStore = lazy(() => import('@renderer/pages/substore'))
+const SpeedTest = lazy(() => import('@renderer/pages/speed-test'))
+const CodexTest = lazy(() => import('@renderer/pages/codex-test'))
+const GeneralSpeedTest = lazy(() => import('@renderer/pages/general-speed-test'))
+const ProcessTest = lazy(() => import('@renderer/pages/process-test'))
+
+function page(Component: LazyExoticComponent<ComponentType>): ReactElement {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-full items-center justify-center text-sm text-foreground-400">
+          正在加载…
+        </div>
+      }
+    >
+      <Component />
+    </Suspense>
+  )
+}
 const routes = [
   {
     path: '/mihomo',
-    element: <Mihomo />
+    element: page(Mihomo)
   },
   {
     path: '/sysproxy',
-    element: <Sysproxy />
+    element: page(Sysproxy)
   },
   {
     path: '/tun',
-    element: <Tun />
+    element: page(Tun)
   },
   {
     path: '/proxies',
-    element: <Proxies />
+    element: page(Proxies)
   },
   {
     path: '/rules',
-    element: <Rules />
+    element: page(Rules)
   },
   {
     path: '/resources',
-    element: <Resources />
+    element: page(Resources)
   },
   {
     path: '/dns',
-    element: <DNS />
+    element: page(DNS)
   },
   {
     path: '/sniffer',
-    element: <Sniffer />
+    element: page(Sniffer)
   },
   {
     path: '/logs',
-    element: <Logs />
+    element: page(Logs)
   },
   {
     path: '/speed-test',
-    element: <SpeedTest />
+    element: page(SpeedTest)
   },
   {
     path: '/speed-test/general',
-    element: <GeneralSpeedTest />
+    element: page(GeneralSpeedTest)
   },
   {
     path: '/speed-test/codex',
-    element: <CodexTest />
+    element: page(CodexTest)
   },
   {
     path: '/speed-test/process',
-    element: <ProcessTest />
+    element: page(ProcessTest)
   },
   {
     path: '/connections',
-    element: <Connections />
+    element: page(Connections)
   },
   {
     path: '/override',
-    element: <Override />
+    element: page(Override)
   },
   {
     path: '/profiles',
-    element: <Profiles />
+    element: page(Profiles)
   },
   {
     path: '/settings',
-    element: <Settings />
+    element: page(Settings)
   },
   {
     path: '/substore',
-    element: <SubStore />
+    element: page(SubStore)
   },
   {
     path: '/',

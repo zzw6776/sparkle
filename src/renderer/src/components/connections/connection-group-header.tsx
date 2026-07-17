@@ -5,6 +5,7 @@ import React, { memo, useMemo } from 'react'
 import { CgClose, CgTrash } from 'react-icons/cg'
 import { IoIosArrowBack } from 'react-icons/io'
 import { MdSpeed } from 'react-icons/md'
+import { RiPushpin2Fill, RiPushpin2Line } from 'react-icons/ri'
 
 interface Props {
   groupKey: string
@@ -20,9 +21,11 @@ interface Props {
   displayIcon?: boolean
   iconUrl?: string
   displayName?: string
+  isPinned: boolean
   onToggle: (key: string, currentlyOpen: boolean) => void
   onCloseAll: (key: string) => void
   onSpeedTest: (key: string) => void
+  onPin: (key: string) => void
 }
 
 const ConnectionGroupHeaderComponent: React.FC<Props> = ({
@@ -39,9 +42,11 @@ const ConnectionGroupHeaderComponent: React.FC<Props> = ({
   displayIcon,
   iconUrl,
   displayName,
+  isPinned,
   onToggle,
   onCloseAll,
-  onSpeedTest
+  onSpeedTest,
+  onPin
 }) => {
   const title = useMemo(() => {
     if (displayName) return displayName
@@ -95,6 +100,21 @@ const ConnectionGroupHeaderComponent: React.FC<Props> = ({
                   variant="light"
                   size="sm"
                   isIconOnly
+                  color={isPinned ? 'primary' : 'default'}
+                  aria-label={isPinned ? '取消置顶该进程' : '置顶该进程'}
+                  title={isPinned ? '取消置顶' : '置顶进程'}
+                  onPress={() => onPin(groupKey)}
+                >
+                  {isPinned ? (
+                    <RiPushpin2Fill className="text-lg" />
+                  ) : (
+                    <RiPushpin2Line className="text-lg" />
+                  )}
+                </Button>
+                <Button
+                  variant="light"
+                  size="sm"
+                  isIconOnly
                   color="primary"
                   aria-label="测试该进程的历史目标"
                   onPress={() => onSpeedTest(groupKey)}
@@ -139,7 +159,8 @@ const ConnectionGroupHeader = memo(ConnectionGroupHeaderComponent, (prev, next) 
     prev.isClosed === next.isClosed &&
     prev.displayIcon === next.displayIcon &&
     prev.iconUrl === next.iconUrl &&
-    prev.displayName === next.displayName
+    prev.displayName === next.displayName &&
+    prev.isPinned === next.isPinned
   )
 })
 

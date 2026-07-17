@@ -140,11 +140,22 @@ export async function cancelMihomoCodexTest(): Promise<boolean> {
 export async function mihomoCodexActualTest(
   proxies: string[],
   rounds: number,
-  concurrency: number
+  concurrency: number,
+  options: CodexActualTestOptions
 ): Promise<CodexActualTestResult[]> {
   return ipcErrorWrapper(
-    await window.electron.ipcRenderer.invoke('mihomoCodexActualTest', proxies, rounds, concurrency)
+    await window.electron.ipcRenderer.invoke(
+      'mihomoCodexActualTest',
+      proxies,
+      rounds,
+      concurrency,
+      options
+    )
   )
+}
+
+export async function listCodexActualTestModels(): Promise<CodexActualTestModelOption[]> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('listCodexActualTestModels'))
 }
 
 export async function cancelMihomoCodexActualTest(): Promise<boolean> {

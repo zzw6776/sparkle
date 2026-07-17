@@ -1,20 +1,22 @@
+import { Button, Chip } from '@heroui/react'
 import {
-  Autocomplete,
-  AutocompleteItem,
-  Button,
-  Checkbox,
-  Chip,
-  Progress,
-  Select,
-  SelectItem
-} from '@heroui/react'
-import BasePage from '@renderer/components/base/base-page'
+  FOLLOW_TEST_GROUP,
+  TestGroupSelectors,
+  TestHistoryNotice,
+  TestNumberAutocomplete,
+  TestOptionSelect,
+  TestPageControlRow,
+  TestPageControls,
+  TestPageShell,
+  TestProgressBar,
+  TestRoundSelector,
+  TestRunButton
+} from '@renderer/components/speed-test/test-page-controls'
 import {
   TestResultActionHeader,
   TestResultEmptyState,
   TestResultNodeCell,
-  TestPageControlRow,
-  TestPageControls,
+  TestResultSelectionHeader,
   TestResultSortHeader,
   TestResultSwitchAction,
   TestResultTableHeader,
@@ -38,22 +40,16 @@ import {
   subscribeCodexActualTestStore
 } from '@renderer/utils/codex-actual-test-store'
 import { formatLatency } from '@renderer/utils/format-latency'
-import { mihomoChangeProxy, mihomoCloseConnections } from '@renderer/utils/ipc'
+import {
+  listCodexActualTestModels,
+  mihomoChangeProxy,
+  mihomoCloseConnections
+} from '@renderer/utils/ipc'
 import { notify } from '@renderer/utils/notification'
 import { isTestableProxy } from '@renderer/utils/testable-proxy'
-import { formatTestHistoryTime } from '@renderer/utils/test-history'
 import { copyText } from '@renderer/utils/clipboard'
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore
-} from 'react'
-import { IoIosArrowBack } from 'react-icons/io'
-import { MdCheckCircle, MdContentCopy, MdErrorOutline, MdStop } from 'react-icons/md'
+import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { MdCheckCircle, MdContentCopy, MdErrorOutline } from 'react-icons/md'
 import { Virtuoso } from 'react-virtuoso'
 import { useNavigate } from 'react-router-dom'
 
@@ -89,7 +85,7 @@ const actualStageText: Record<CodexActualTestStage, string> = {
 
 const MIN_CONCURRENCY = 1
 const MAX_CONCURRENCY = 16
-const FOLLOW_TEST_GROUP = '__FOLLOW_TEST_GROUP__'
+const DEFAULT_CODEX_OPTION = '__CODEX_DEFAULT__'
 const ACTUAL_TABLE_COLUMNS = 'grid-cols-[minmax(180px,1.7fr)_repeat(7,minmax(86px,1fr))_82px_72px]'
 const LINK_TABLE_COLUMNS = 'grid-cols-[minmax(160px,1.7fr)_repeat(6,minmax(74px,1fr))_82px_72px]'
 const EMPTY_LINK_RESULTS: Record<string, CodexTestResult> = {}
@@ -98,6 +94,34 @@ const EMPTY_ACTUAL_RESULTS: Record<string, CodexActualTestResult> = {}
 function normalizeConcurrency(value?: number): number {
   if (!Number.isFinite(value)) return 6
   return Math.min(MAX_CONCURRENCY, Math.max(MIN_CONCURRENCY, Math.trunc(value!)))
+}
+
+function normalizeActualConcurrency(value?: number): number {
+  if (!Number.isFinite(value)) return 2
+  return Math.min(4, Math.max(1, Math.trunc(value!)))
+}
+
+const reasoningEffortOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+
+function reasoningEffortLabel(value: string): string {
+  const labels: Record<string, string> = {
+    none: '无推理',
+    minimal: '最低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '最高'
+  }
+  return labels[value] || value
+}
+
+function lowestReasoningEffort(model: CodexActualTestModelOption): string {
+  const efforts = model.supportedReasoningEfforts.map((option) => option.reasoningEffort)
+  return (
+    reasoningEffortOrder.find((effort) => efforts.includes(effort)) ||
+    efforts[0] ||
+    model.defaultReasoningEffort
+  )
 }
 
 function metric(value?: number): string {
@@ -112,7 +136,7 @@ function actualLogsText(logs: CodexActualTestLogEntry[]): string {
   return logs
     .map((entry) => {
       const context = entry.proxy
-        ? `${entry.proxy}${entry.round ? ` · 第 ${entry.round} 轮` : ''}`
+        ? `${entry.worker ? `线程 ${entry.worker}\t` : ''}${entry.proxy}${entry.round ? ` · 第 ${entry.round} 轮` : ''}`
         : '测试任务'
       return `${logTime(entry.timestamp)}\t${context}\t${entry.message}`
     })
@@ -438,6 +462,7 @@ const CodexActualRow = memo<CodexActualRowProps>(
             content={
               <div className="space-y-1 px-1 py-0.5 text-xs">
                 <div>模型：{result.model || '未知'}</div>
+                <div>推理深度：{result.reasoningEffort || '模型默认'}</div>
                 <div>
                   成功：{result.succeeded}/{result.completedRounds} 轮
                 </div>
@@ -447,6 +472,7 @@ const CodexActualRow = memo<CodexActualRowProps>(
                     <span className={round.success ? '' : 'text-danger'}>
                       {round.success ? '成功' : round.error || '失败'}
                       {round.model ? ` · ${round.model}` : ''}
+                      {round.reasoningEffort ? ` · ${round.reasoningEffort}` : ''}
                     </span>
                   </div>
                 ))}
@@ -545,23 +571,36 @@ const CodexActualRow = memo<CodexActualRowProps>(
 
 CodexActualRow.displayName = 'CodexActualRow'
 
-const ActualLogRow = memo<{ entry: CodexActualTestLogEntry }>(({ entry }) => (
-  <div
-    className={`grid grid-cols-[70px_minmax(130px,240px)_1fr] gap-2 py-1 ${
-      entry.level === 'error'
-        ? 'text-danger'
-        : entry.level === 'success'
-          ? 'text-success'
-          : 'text-foreground-600'
-    }`}
-  >
-    <span className="tabular-nums text-foreground-400">{logTime(entry.timestamp)}</span>
-    <span className="flag-emoji truncate" title={entry.proxy}>
-      {entry.proxy ? `${entry.proxy}${entry.round ? ` · 第 ${entry.round} 轮` : ''}` : '测试任务'}
-    </span>
-    <span className="break-words">{entry.message}</span>
-  </div>
-))
+function actualLogTone(entry: CodexActualTestLogEntry): string {
+  if (entry.level === 'error') return 'border-danger bg-danger/10'
+  if (entry.level === 'success') return 'border-success bg-success/10'
+  if (entry.message.startsWith('回复：')) return 'border-warning bg-warning/10'
+  if (entry.message.includes('首个响应片段')) return 'border-secondary bg-secondary/10'
+  return 'border-primary bg-primary/10'
+}
+
+const ActualLogRow = memo<{ entry: CodexActualTestLogEntry; showWorker: boolean }>(
+  ({ entry, showWorker }) => (
+    <div
+      className={`my-1 grid grid-cols-[70px_minmax(160px,260px)_1fr] items-start gap-2 rounded-md border-l-4 px-2 py-1.5 text-foreground-700 ${actualLogTone(entry)}`}
+    >
+      <span className="tabular-nums text-foreground-400">{logTime(entry.timestamp)}</span>
+      <span className="flex min-w-0 items-center gap-1 font-sans text-foreground-500">
+        {showWorker && entry.worker && (
+          <span className="shrink-0 rounded bg-foreground/10 px-1 py-0.5 text-[10px] font-medium">
+            线程 {entry.worker}
+          </span>
+        )}
+        <span className="flag-emoji truncate" title={entry.proxy}>
+          {entry.proxy
+            ? `${entry.proxy}${entry.round ? ` · 第 ${entry.round} 轮` : ''}`
+            : '测试任务'}
+        </span>
+      </span>
+      <span className="break-words">{entry.message}</span>
+    </div>
+  )
+)
 
 ActualLogRow.displayName = 'ActualLogRow'
 
@@ -573,7 +612,31 @@ interface ActualLogPanelProps {
 }
 
 const ActualLogPanel = memo<ActualLogPanelProps>(({ logs, expanded, onToggle, onCopy }) => {
+  const [selectedPartition, setSelectedPartition] = useState('all')
+  const latestTestId = logs.reduce<string | undefined>(
+    (current, entry) =>
+      entry.worker === undefined && entry.message.startsWith('开始测试') ? entry.id : current,
+    undefined
+  )
+  useEffect(() => setSelectedPartition('all'), [latestTestId])
   if (logs.length === 0) return null
+  const partitions = [
+    { key: 'all', label: '全部', logs },
+    {
+      key: 'task',
+      label: '任务',
+      logs: logs.filter((entry) => entry.worker === undefined)
+    },
+    ...[...new Set(logs.flatMap((entry) => (entry.worker ? [entry.worker] : [])))]
+      .sort((left, right) => left - right)
+      .map((worker) => ({
+        key: `worker-${worker}`,
+        label: `线程 ${worker}`,
+        logs: logs.filter((entry) => entry.worker === worker)
+      }))
+  ].filter((partition) => partition.logs.length > 0)
+  const activePartition =
+    partitions.find((partition) => partition.key === selectedPartition) || partitions[0]
   return (
     <div className="overflow-hidden rounded-xl border border-divider bg-content1">
       <div className="flex items-center hover:bg-content2">
@@ -598,15 +661,50 @@ const ActualLogPanel = memo<ActualLogPanelProps>(({ logs, expanded, onToggle, on
         </Button>
       </div>
       {expanded && (
-        <Virtuoso
-          className="max-h-56 cursor-text select-text overflow-y-auto border-t border-divider bg-content2/40 px-3 py-2 font-mono text-xs"
-          style={{ height: Math.min(224, Math.max(32, logs.length * 28)) }}
-          data={logs}
-          computeItemKey={(_index, entry) => entry.id}
-          initialTopMostItemIndex={logs.length - 1}
-          followOutput="auto"
-          itemContent={(_index, entry) => <ActualLogRow entry={entry} />}
-        />
+        <div className="border-t border-divider bg-content2/40 p-2">
+          <div className="mb-2 flex gap-1 overflow-x-auto pb-1">
+            {partitions.map((partition) => {
+              const active = partition.key === activePartition.key
+              return (
+                <button
+                  key={partition.key}
+                  type="button"
+                  className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors ${
+                    active
+                      ? 'bg-primary font-medium text-primary-foreground shadow-sm'
+                      : 'bg-content1 text-foreground-500 hover:bg-content2 hover:text-foreground'
+                  }`}
+                  onClick={() => setSelectedPartition(partition.key)}
+                >
+                  <span>{partition.label}</span>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                      active ? 'bg-primary-foreground/20' : 'bg-foreground/10'
+                    }`}
+                  >
+                    {partition.logs.length}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <section className="min-w-0 overflow-hidden rounded-lg border border-divider bg-content1">
+            <Virtuoso
+              key={activePartition.key}
+              className="max-h-80 cursor-text select-text overflow-y-auto px-2 font-mono text-xs"
+              style={{
+                height: Math.min(320, Math.max(64, activePartition.logs.length * 42))
+              }}
+              data={activePartition.logs}
+              computeItemKey={(_index, entry) => entry.id}
+              initialTopMostItemIndex={activePartition.logs.length - 1}
+              followOutput="auto"
+              itemContent={(_index, entry) => (
+                <ActualLogRow entry={entry} showWorker={activePartition.key === 'all'} />
+              )}
+            />
+          </section>
+        </div>
       )}
     </div>
   )
@@ -637,17 +735,26 @@ const CodexTest: React.FC = () => {
   const [rounds, setRounds] = useState(3)
   const [actualRounds, setActualRounds] = useState(1)
   const [actualTopCount, setActualTopCount] = useState('5')
+  const [actualModels, setActualModels] = useState<CodexActualTestModelOption[]>([])
+  const [actualModelsLoading, setActualModelsLoading] = useState(true)
+  const [actualModelsError, setActualModelsError] = useState<string>()
+  const [actualModel, setActualModel] = useState(
+    () => appConfig?.codexActualTestModel || DEFAULT_CODEX_OPTION
+  )
+  const [actualReasoningEffort, setActualReasoningEffort] = useState(
+    () => appConfig?.codexActualTestReasoningEffort || DEFAULT_CODEX_OPTION
+  )
   const [concurrencyInput, setConcurrencyInput] = useState(() =>
     normalizeConcurrency(appConfig?.codexTestConcurrency).toString()
   )
-  const [actualConcurrencyInput, setActualConcurrencyInput] = useState('2')
-  const concurrencyRef = useRef<HTMLInputElement>(null)
-  const actualTopRef = useRef<HTMLInputElement>(null)
+  const [actualConcurrencyInput, setActualConcurrencyInput] = useState(() =>
+    normalizeActualConcurrency(appConfig?.codexActualTestConcurrency).toString()
+  )
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [actualSortKey, setActualSortKey] = useState<ActualSortKey>('score')
   const [actualSortDirection, setActualSortDirection] = useState<SortDirection>('asc')
-  const [actualLogExpanded, setActualLogExpanded] = useState(true)
+  const [actualLogExpanded, setActualLogExpanded] = useState(false)
   const [switchingProxy, setSwitchingProxy] = useState<string>()
   const { autoCloseConnection = true, closeMode = 'all' } = appConfig || {}
   const group = groups.find((item) => item.name === groupName) || groups[0]
@@ -687,6 +794,38 @@ const CodexTest: React.FC = () => {
       ),
     [proxies.length]
   )
+  const selectedActualModel = useMemo(
+    () =>
+      actualModels.find((model) => model.model === actualModel) ||
+      (actualModel === DEFAULT_CODEX_OPTION
+        ? actualModels.find((model) => model.isDefault)
+        : undefined),
+    [actualModel, actualModels]
+  )
+  const actualModelOptions = useMemo(
+    () =>
+      actualModels.length > 0
+        ? actualModels.map((model) => ({
+            key: model.model,
+            label: `${model.displayName}${model.isDefault ? ' · 默认' : ''}`
+          }))
+        : [{ key: DEFAULT_CODEX_OPTION, label: '跟随 Codex 默认' }],
+    [actualModels]
+  )
+  const actualReasoningOptions = useMemo(
+    () =>
+      selectedActualModel?.supportedReasoningEfforts.length
+        ? selectedActualModel.supportedReasoningEfforts.map((option) => ({
+            key: option.reasoningEffort,
+            label: `${reasoningEffortLabel(option.reasoningEffort)}${
+              option.reasoningEffort === selectedActualModel.defaultReasoningEffort
+                ? ' · 模型默认'
+                : ''
+            }`
+          }))
+        : [{ key: DEFAULT_CODEX_OPTION, label: '跟随模型默认' }],
+    [selectedActualModel]
+  )
   const linkScoreKey = useMemo(
     () =>
       proxies
@@ -703,6 +842,50 @@ const CodexTest: React.FC = () => {
       setGroupName(historyGroup?.name || groups[0].name)
     }
   }, [actualState.groupName, groupName, groups, state.groupName])
+
+  useEffect(() => {
+    let cancelled = false
+    setActualModelsLoading(true)
+    void listCodexActualTestModels()
+      .then((models) => {
+        if (cancelled) return
+        setActualModels(models)
+        setActualModelsError(undefined)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setActualModelsError(String(error))
+      })
+      .finally(() => {
+        if (!cancelled) setActualModelsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (actualModels.length === 0 || actualState.testing) return
+    setActualModel((current) => {
+      if (actualModels.some((model) => model.model === current)) return current
+      const configured = appConfig?.codexActualTestModel
+      if (configured && actualModels.some((model) => model.model === configured)) return configured
+      return actualModels.find((model) => model.isDefault)?.model || actualModels[0].model
+    })
+  }, [actualModels, actualState.testing, appConfig?.codexActualTestModel])
+
+  useEffect(() => {
+    if (!selectedActualModel || actualState.testing) return
+    const supported = new Set(
+      selectedActualModel.supportedReasoningEfforts.map((option) => option.reasoningEffort)
+    )
+    setActualReasoningEffort((current) => {
+      if (current !== DEFAULT_CODEX_OPTION && supported.has(current)) return current
+      const configured = appConfig?.codexActualTestReasoningEffort
+      if (configured && supported.has(configured)) return configured
+      return lowestReasoningEffort(selectedActualModel) || DEFAULT_CODEX_OPTION
+    })
+  }, [actualState.testing, appConfig?.codexActualTestReasoningEffort, selectedActualModel])
 
   useEffect(() => {
     if (
@@ -740,6 +923,14 @@ const CodexTest: React.FC = () => {
       setConcurrencyInput(normalizeConcurrency(appConfig?.codexTestConcurrency).toString())
     }
   }, [appConfig?.codexTestConcurrency, state.testing])
+
+  useEffect(() => {
+    if (!actualState.testing) {
+      setActualConcurrencyInput(
+        normalizeActualConcurrency(appConfig?.codexActualTestConcurrency).toString()
+      )
+    }
+  }, [actualState.testing, appConfig?.codexActualTestConcurrency])
 
   const rows = useMemo(() => {
     return [...proxies].sort((left, right) => {
@@ -927,50 +1118,76 @@ const CodexTest: React.FC = () => {
     setMode(nextMode)
   }, [])
 
-  const renderedRows = useMemo(
-    () =>
-      mode === 'actual'
-        ? actualRows.map((proxy) => (
-            <CodexActualRow
-              key={proxy.name}
-              proxyName={proxy.name}
-              linkResult={visibleResults[proxy.name]}
-              result={visibleActualResults[proxy.name]}
-              selected={actualSelected.has(proxy.name)}
-              disabled={anyTesting}
-              groupName={switchGroup?.name}
-              canSwitch={switchableProxyNames.has(proxy.name)}
-              isCurrent={switchGroup?.now === proxy.name}
-              isLoading={switchingProxy === proxy.name}
-              switchBusy={Boolean(switchingProxy)}
-              onSelectedChange={changeActualSelection}
-              onSwitch={switchProxy}
-            />
-          ))
-        : rows.map((proxy) => (
-            <CodexLinkRow
-              key={proxy.name}
-              proxyName={proxy.name}
-              result={visibleResults[proxy.name]}
-              selected={selected.has(proxy.name)}
-              disabled={anyTesting}
-              groupName={switchGroup?.name}
-              canSwitch={switchableProxyNames.has(proxy.name)}
-              isCurrent={switchGroup?.now === proxy.name}
-              isLoading={switchingProxy === proxy.name}
-              switchBusy={Boolean(switchingProxy)}
-              onSelectedChange={changeLinkSelection}
-              onSwitch={switchProxy}
-            />
-          )),
+  const changeActualModel = useCallback(
+    (modelName: string): void => {
+      const model = actualModels.find((option) => option.model === modelName)
+      const supported = new Set(
+        model?.supportedReasoningEfforts.map((option) => option.reasoningEffort) || []
+      )
+      const nextEffort =
+        actualReasoningEffort !== DEFAULT_CODEX_OPTION && supported.has(actualReasoningEffort)
+          ? actualReasoningEffort
+          : model
+            ? lowestReasoningEffort(model)
+            : DEFAULT_CODEX_OPTION
+      setActualModel(modelName)
+      setActualReasoningEffort(nextEffort)
+      void patchAppConfig({
+        codexActualTestModel: modelName === DEFAULT_CODEX_OPTION ? '' : modelName,
+        codexActualTestReasoningEffort: nextEffort === DEFAULT_CODEX_OPTION ? '' : nextEffort
+      })
+    },
+    [actualModels, actualReasoningEffort, patchAppConfig]
+  )
+
+  const changeActualReasoningEffort = useCallback(
+    (effort: string): void => {
+      setActualReasoningEffort(effort)
+      void patchAppConfig({
+        codexActualTestReasoningEffort: effort === DEFAULT_CODEX_OPTION ? '' : effort
+      })
+    },
+    [patchAppConfig]
+  )
+
+  const renderRow = useCallback(
+    (_index: number, proxy: ControllerProxiesDetail) =>
+      mode === 'actual' ? (
+        <CodexActualRow
+          proxyName={proxy.name}
+          linkResult={visibleResults[proxy.name]}
+          result={visibleActualResults[proxy.name]}
+          selected={actualSelected.has(proxy.name)}
+          disabled={anyTesting}
+          groupName={switchGroup?.name}
+          canSwitch={switchableProxyNames.has(proxy.name)}
+          isCurrent={switchGroup?.now === proxy.name}
+          isLoading={switchingProxy === proxy.name}
+          switchBusy={Boolean(switchingProxy)}
+          onSelectedChange={changeActualSelection}
+          onSwitch={switchProxy}
+        />
+      ) : (
+        <CodexLinkRow
+          proxyName={proxy.name}
+          result={visibleResults[proxy.name]}
+          selected={selected.has(proxy.name)}
+          disabled={anyTesting}
+          groupName={switchGroup?.name}
+          canSwitch={switchableProxyNames.has(proxy.name)}
+          isCurrent={switchGroup?.now === proxy.name}
+          isLoading={switchingProxy === proxy.name}
+          switchBusy={Boolean(switchingProxy)}
+          onSelectedChange={changeLinkSelection}
+          onSwitch={switchProxy}
+        />
+      ),
     [
-      actualRows,
       actualSelected,
       anyTesting,
       changeActualSelection,
       changeLinkSelection,
       mode,
-      rows,
       selected,
       switchableProxyNames,
       switchingProxy,
@@ -983,342 +1200,258 @@ const CodexTest: React.FC = () => {
   )
 
   return (
-    <BasePage
-      title="Codex 测试"
-      header={
-        <Button
-          size="sm"
-          isIconOnly
-          variant="light"
-          className="app-nodrag"
-          onPress={() => navigate('/speed-test')}
-        >
-          <IoIosArrowBack className="text-lg" />
-        </Button>
-      }
-    >
-      <div className="flex min-h-full w-full flex-col">
-        <section className="border-b border-divider px-3 py-2">
-          <div className="inline-flex rounded-xl border border-divider bg-content2 p-1">
-            <Button
-              size="sm"
-              color={mode === 'link' ? 'primary' : 'default'}
-              variant={mode === 'link' ? 'solid' : 'light'}
-              className="min-w-28"
-              onPress={() => changeMode('link')}
-            >
-              链路测试{state.testing ? ' · 进行中' : ''}
-            </Button>
-            <Button
-              size="sm"
-              color={mode === 'actual' ? 'primary' : 'default'}
-              variant={mode === 'actual' ? 'solid' : 'light'}
-              className="min-w-28"
-              onPress={() => changeMode('actual')}
-            >
-              真实响应{actualState.testing ? ' · 进行中' : ''}
-            </Button>
-          </div>
-        </section>
-        <TestPageControls>
-          <TestPageControlRow>
-            <Select
-              label="测试节点组"
-              size="sm"
-              className="min-w-52 flex-1"
-              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-              selectedKeys={group ? new Set([group.name]) : new Set()}
-              disallowEmptySelection
-              isDisabled={anyTesting || groups.length === 0}
-              onSelectionChange={(keys) => {
-                const next = keys.currentKey
-                if (next) setGroupName(String(next))
-              }}
-            >
-              {groups.map((item) => (
-                <SelectItem key={item.name}>{item.name}</SelectItem>
-              ))}
-            </Select>
-
-            <Select
-              label="切换目标组"
-              size="sm"
-              className="min-w-52 flex-1"
-              selectedKeys={new Set([switchGroupName])}
-              disallowEmptySelection
-              isDisabled={groups.length === 0}
-              onSelectionChange={(keys) => {
-                const next = keys.currentKey
-                if (next) setSwitchGroupName(String(next))
-              }}
-            >
-              {[
-                { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
-                ...groups.map((item) => ({ key: item.name, label: item.name }))
-              ].map((item) => (
-                <SelectItem key={item.key}>{item.label}</SelectItem>
-              ))}
-            </Select>
-
-            <div>
-              <div className="mb-1 text-xs text-foreground-500">测试轮数</div>
-              <div className="flex gap-1">
-                {[1, 3, 5].map((value) => (
-                  <Button
-                    key={value}
-                    size="sm"
-                    className="min-w-16 data-[disabled=true]:opacity-100"
-                    color={currentRounds === value ? 'primary' : 'default'}
-                    variant={currentRounds === value ? 'solid' : 'flat'}
-                    isDisabled={anyTesting}
-                    onPress={() => {
-                      if (mode === 'actual') setActualRounds(value)
-                      else setRounds(value)
-                    }}
-                  >
-                    {value} 轮
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <Autocomplete
-              ref={concurrencyRef}
-              label="并发数"
-              size="sm"
-              className="w-28"
-              classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-              allowsCustomValue
-              isClearable={false}
-              inputValue={currentConcurrencyInput}
-              selectedKey={null}
-              isInvalid={!anyTesting && currentConcurrency === undefined}
-              errorMessage={
-                currentConcurrencyInput === ''
-                  ? '请输入并发数'
-                  : `请输入 ${MIN_CONCURRENCY}-${concurrencyMax} 的整数`
-              }
-              isDisabled={anyTesting}
-              onInputChange={(value) => {
-                if (mode === 'actual') {
-                  setActualConcurrencyInput(value)
-                } else {
-                  setConcurrencyInput(value)
-                }
-              }}
-              onSelectionChange={(key) => {
-                if (key === null) return
-                if (mode === 'actual') setActualConcurrencyInput(String(key))
-                else setConcurrencyInput(String(key))
-                concurrencyRef.current?.blur()
-              }}
-              onBlur={() => {
-                if (mode === 'link' && currentConcurrency !== undefined) {
-                  void patchAppConfig({ codexTestConcurrency: currentConcurrency })
-                }
-              }}
-            >
-              {concurrencyOptions.map((value) => (
-                <AutocompleteItem key={String(value)} textValue={String(value)}>
-                  {value}
-                </AutocompleteItem>
-              ))}
-            </Autocomplete>
-
-            {mode === 'actual' && (
-              <Autocomplete
-                ref={actualTopRef}
-                label="优选数量"
-                size="sm"
-                className="w-32"
-                allowsCustomValue
-                isClearable={false}
-                inputValue={actualTopCount}
-                selectedKey={null}
-                isInvalid={!anyTesting && actualTopLimit === undefined}
-                errorMessage={
-                  actualTopCount === ''
-                    ? '请输入数量'
-                    : proxies.length === 0
-                      ? '当前没有可选节点'
-                      : `请输入 1-${proxies.length} 的整数`
-                }
-                isDisabled={anyTesting}
-                onInputChange={setActualTopCount}
-                onSelectionChange={(key) => {
-                  if (key !== null) {
-                    setActualTopCount(String(key))
-                    actualTopRef.current?.blur()
-                  }
-                }}
-              >
-                {actualTopOptions.map((value) => (
-                  <AutocompleteItem key={String(value)} textValue={String(value)}>
-                    {value}
-                  </AutocompleteItem>
-                ))}
-              </Autocomplete>
-            )}
-
-            {currentTesting ? (
-              <Button
-                color="danger"
-                variant="flat"
-                isLoading={currentCancelling}
-                startContent={currentCancelling ? undefined : <MdStop />}
-                onPress={() => void (mode === 'actual' ? stopCodexActualTest() : stopCodexTest())}
-              >
-                停止测试
-              </Button>
-            ) : anyTesting ? (
-              <Button variant="flat" isDisabled>
-                另一模式正在测试
-              </Button>
-            ) : (
-              <Button
-                color="primary"
-                variant="solid"
-                isDisabled={
-                  selectedNames.length === 0 ||
-                  currentConcurrency === undefined ||
-                  (mode === 'actual' && actualTopLimit === undefined)
-                }
-                onPress={() =>
-                  void (mode === 'actual'
-                    ? runCodexActualTest(
-                        selectedNames,
-                        actualRounds,
-                        currentConcurrency!,
-                        group?.name
-                      )
-                    : runCodexTest(selectedNames, rounds, currentConcurrency!, group?.name))
-                }
-              >
-                {mode === 'actual' ? '真实测试' : '测试'} {selectedNames.length} 个节点
-              </Button>
-            )}
-          </TestPageControlRow>
-
-          {mode === 'link' ? (
-            <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
-              目标：chatgpt.com:443 · 流程：代理 CONNECT → TLS → HTTPS → WebSocket Upgrade。
-              不发送提示词，不调用模型；收到服务响应即可用于比较链路速度。
-            </div>
-          ) : (
-            <div className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-foreground-600">
-              使用本机已登录的官方 Codex 发起真实模型请求。每轮都会消耗 Codex
-              配额；请求在只读临时目录运行、禁止工具，并验证连接确实经过当前隐藏测速通道。建议先运行链路测试，再用“选中链路最快前
-              X 个”筛选节点。
-            </div>
-          )}
-
-          {currentSavedAt && currentHistoryGroup === group?.name && !currentTesting && (
-            <div className="text-xs text-foreground-500">
-              已恢复上次测试结果 · {formatTestHistoryTime(currentSavedAt)}
-            </div>
-          )}
-
-          {currentTesting && activeProgress && (
-            <div>
-              <div className="mb-1 flex justify-between text-xs">
-                <span className="flag-emoji">
-                  {mode === 'actual'
-                    ? actualStageText[activeProgress.stage as CodexActualTestStage]
-                    : stageText[activeProgress.stage as CodexTestStage]}
-                  ：{activeProgress.proxy}（第 {activeProgress.round}/{activeProgress.rounds} 轮）
-                </span>
-                <span>
-                  {activeProgress.completed}/{activeProgress.total}
-                </span>
-              </div>
-              <Progress
-                aria-label={mode === 'actual' ? 'Codex 真实响应测试进度' : 'Codex 链路测试进度'}
-                value={progressValue}
-                color="primary"
-              />
-            </div>
-          )}
-          {currentError && !currentTesting && (
-            <div className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
-              {currentError}
-            </div>
-          )}
+    <TestPageShell title="Codex 测试" onBack={() => navigate('/speed-test')}>
+      <section className="border-b border-divider px-3 py-2">
+        <div className="inline-flex rounded-xl border border-divider bg-content2 p-1">
+          <Button
+            size="sm"
+            color={mode === 'link' ? 'primary' : 'default'}
+            variant={mode === 'link' ? 'solid' : 'light'}
+            className="min-w-28"
+            onPress={() => changeMode('link')}
+          >
+            链路测试{state.testing ? ' · 进行中' : ''}
+          </Button>
+          <Button
+            size="sm"
+            color={mode === 'actual' ? 'primary' : 'default'}
+            variant={mode === 'actual' ? 'solid' : 'light'}
+            className="min-w-28"
+            onPress={() => changeMode('actual')}
+          >
+            真实响应{actualState.testing ? ' · 进行中' : ''}
+          </Button>
+        </div>
+      </section>
+      <TestPageControls>
+        <TestPageControlRow>
+          <TestGroupSelectors
+            groups={groups}
+            testGroupName={group?.name}
+            switchGroupName={switchGroupName}
+            testGroupDisabled={anyTesting}
+            onTestGroupChange={setGroupName}
+            onSwitchGroupChange={setSwitchGroupName}
+          />
 
           {mode === 'actual' && (
-            <ActualLogPanel
-              logs={actualState.logs}
-              expanded={actualLogExpanded}
-              onToggle={toggleActualLogs}
-              onCopy={copyActualLogs}
+            <>
+              <TestOptionSelect
+                label="模型"
+                value={actualModel}
+                options={actualModelOptions}
+                disabled={anyTesting || actualModelsLoading}
+                loading={actualModelsLoading}
+                className="min-w-48 flex-1"
+                onChange={changeActualModel}
+              />
+              <TestOptionSelect
+                label="推理深度"
+                value={actualReasoningEffort}
+                options={actualReasoningOptions}
+                disabled={anyTesting || actualModelsLoading}
+                loading={actualModelsLoading}
+                className="w-44"
+                onChange={changeActualReasoningEffort}
+              />
+            </>
+          )}
+
+          <TestRoundSelector
+            value={currentRounds}
+            disabled={anyTesting}
+            onChange={(value) => {
+              if (mode === 'actual') setActualRounds(value)
+              else setRounds(value)
+            }}
+          />
+
+          <TestNumberAutocomplete
+            label="并发数"
+            value={currentConcurrencyInput}
+            disabled={anyTesting}
+            min={MIN_CONCURRENCY}
+            max={concurrencyMax}
+            options={concurrencyOptions}
+            emptyPlaceholder="请输入并发数"
+            onValueChange={(value) => {
+              if (mode === 'actual') {
+                setActualConcurrencyInput(value)
+              } else {
+                setConcurrencyInput(value)
+              }
+            }}
+            onValidBlur={(value) => {
+              if (mode === 'link') void patchAppConfig({ codexTestConcurrency: value })
+              else void patchAppConfig({ codexActualTestConcurrency: value })
+            }}
+          />
+
+          {mode === 'actual' && (
+            <TestNumberAutocomplete
+              label="优选数量"
+              value={actualTopCount}
+              disabled={anyTesting}
+              min={1}
+              max={Math.max(1, proxies.length)}
+              options={actualTopOptions}
+              className="w-32"
+              emptyPlaceholder="请输入数量"
+              invalid={actualTopLimit === undefined}
+              validationMessage={
+                actualTopCount === ''
+                  ? '请输入数量'
+                  : proxies.length === 0
+                    ? '当前没有可选节点'
+                    : `请输入 1-${proxies.length} 的整数`
+              }
+              onValueChange={setActualTopCount}
             />
           )}
-        </TestPageControls>
 
-        <section className="min-h-0 flex-1">
-          <div>
-            <div className="flex items-center justify-between border-b border-divider px-4 py-3">
-              <Checkbox
-                classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-                isSelected={allSelected}
-                isIndeterminate={selectedNames.length > 0 && !allSelected}
-                isDisabled={anyTesting || proxies.length === 0}
-                onValueChange={(checked) => {
-                  const next = checked
-                    ? new Set(proxies.map((proxy) => proxy.name))
-                    : new Set<string>()
-                  if (mode === 'actual') setActualSelected(next)
-                  else setSelected(next)
-                }}
-              >
-                全选
-              </Checkbox>
-              <span className="text-xs text-foreground-500">
-                {mode === 'actual'
-                  ? '真实响应按首字、完整返回、成功率与路由验证综合排序'
-                  : '结果按 Codex 综合表现排序'}
-              </span>
-            </div>
+          <TestRunButton
+            running={currentTesting}
+            stopping={currentCancelling}
+            blocked={!currentTesting && anyTesting}
+            blockedLabel="另一模式正在测试"
+            disabled={
+              selectedNames.length === 0 ||
+              currentConcurrency === undefined ||
+              (mode === 'actual' && (actualTopLimit === undefined || actualModelsLoading))
+            }
+            startLabel={`${mode === 'actual' ? '真实测试' : '测试'} ${selectedNames.length} 个节点`}
+            onStart={() =>
+              mode === 'actual'
+                ? runCodexActualTest(
+                    selectedNames,
+                    actualRounds,
+                    currentConcurrency!,
+                    group?.name,
+                    {
+                      model: actualModel === DEFAULT_CODEX_OPTION ? undefined : actualModel,
+                      reasoningEffort:
+                        actualReasoningEffort === DEFAULT_CODEX_OPTION
+                          ? undefined
+                          : actualReasoningEffort
+                    }
+                  )
+                : runCodexTest(selectedNames, rounds, currentConcurrency!, group?.name)
+            }
+            onStop={() => (mode === 'actual' ? stopCodexActualTest() : stopCodexTest())}
+          />
+        </TestPageControlRow>
 
-            <TestResultTableViewport
-              minWidthClassName={mode === 'actual' ? 'min-w-250' : 'min-w-210'}
-            >
-              {mode === 'actual' ? (
-                <TestResultTableHeader columnsClassName={ACTUAL_TABLE_COLUMNS}>
-                  {actualSortHeader('name', '节点')}
-                  {actualSortHeader('linkScore', '链路延迟')}
-                  {actualSortHeader('score', '综合耗时')}
-                  {actualSortHeader('firstTokenMs', '首字耗时')}
-                  {actualSortHeader('totalMs', '完整返回')}
-                  {actualSortHeader('successRate', '成功率')}
-                  {actualSortHeader('routeVerifiedRate', '路由验证')}
-                  {actualSortHeader('tokens', 'Token')}
-                  {actualSortHeader('grade', '评级')}
-                  <TestResultActionHeader />
-                </TestResultTableHeader>
-              ) : (
-                <TestResultTableHeader columnsClassName={LINK_TABLE_COLUMNS}>
-                  {sortHeader('name', '节点')}
-                  {sortHeader('score', '综合耗时')}
-                  {sortHeader('tunnelMs', 'CONNECT')}
-                  {sortHeader('tlsMs', 'TLS')}
-                  {sortHeader('httpsTtfbMs', 'HTTPS')}
-                  {sortHeader('websocketMs', 'WebSocket')}
-                  {sortHeader('successRate', '成功率')}
-                  {sortHeader('grade', '评级')}
-                  <TestResultActionHeader />
-                </TestResultTableHeader>
-              )}
-
-              {activeRows.length === 0 ? (
-                <TestResultEmptyState />
-              ) : (
-                <TestResultVirtualRows items={renderedRows} />
-              )}
-            </TestResultTableViewport>
+        {mode === 'link' ? (
+          <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
+            目标：chatgpt.com:443 · 流程：代理 CONNECT → TLS → HTTPS → WebSocket Upgrade。
+            不发送提示词，不调用模型；收到服务响应即可用于比较链路速度。
           </div>
-        </section>
-      </div>
-    </BasePage>
+        ) : (
+          <div className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-foreground-600">
+            使用本机已登录的官方 Codex 发起真实模型请求。每轮都会消耗 Codex
+            配额；测试使用极简模式：不读取项目说明，关闭搜索、插件、MCP、浏览器、图片、子代理和执行类工具，并默认选择模型支持的最低推理深度。Codex
+            平台固定的系统上下文仍无法移除。请求在只读临时目录运行，并验证连接确实经过当前隐藏测速通道。建议先运行链路测试，再用“选中链路最快前
+            X 个”筛选节点。
+            {actualModelsError && (
+              <span className="ml-1 text-danger">模型列表读取失败：{actualModelsError}</span>
+            )}
+          </div>
+        )}
+
+        <TestHistoryNotice
+          savedAt={currentSavedAt}
+          visible={currentHistoryGroup === group?.name && !currentTesting}
+        />
+
+        {currentTesting && activeProgress && (
+          <TestProgressBar
+            label={`${
+              mode === 'actual'
+                ? actualStageText[activeProgress.stage as CodexActualTestStage]
+                : stageText[activeProgress.stage as CodexTestStage]
+            }：${activeProgress.proxy}（第 ${activeProgress.round}/${activeProgress.rounds} 轮）`}
+            detail={`${activeProgress.completed}/${activeProgress.total}`}
+            value={progressValue}
+            ariaLabel={mode === 'actual' ? 'Codex 真实响应测试进度' : 'Codex 链路测试进度'}
+          />
+        )}
+        {currentError && !currentTesting && (
+          <div className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
+            {currentError}
+          </div>
+        )}
+
+        {mode === 'actual' && (
+          <ActualLogPanel
+            logs={actualState.logs}
+            expanded={actualLogExpanded}
+            onToggle={toggleActualLogs}
+            onCopy={copyActualLogs}
+          />
+        )}
+      </TestPageControls>
+
+      <section className="min-h-0 flex-1">
+        <div>
+          <TestResultSelectionHeader
+            selected={allSelected}
+            indeterminate={selectedNames.length > 0 && !allSelected}
+            disabled={anyTesting || proxies.length === 0}
+            hint={
+              mode === 'actual'
+                ? '真实响应按首字、完整返回、成功率与路由验证综合排序'
+                : '结果按 Codex 综合表现排序'
+            }
+            onChange={(checked) => {
+              const next = checked ? new Set(proxies.map((proxy) => proxy.name)) : new Set<string>()
+              if (mode === 'actual') setActualSelected(next)
+              else setSelected(next)
+            }}
+          />
+
+          <TestResultTableViewport
+            minWidthClassName={mode === 'actual' ? 'min-w-250' : 'min-w-210'}
+          >
+            {mode === 'actual' ? (
+              <TestResultTableHeader columnsClassName={ACTUAL_TABLE_COLUMNS}>
+                {actualSortHeader('name', '节点')}
+                {actualSortHeader('linkScore', '链路延迟')}
+                {actualSortHeader('score', '综合耗时')}
+                {actualSortHeader('firstTokenMs', '首字耗时')}
+                {actualSortHeader('totalMs', '完整返回')}
+                {actualSortHeader('successRate', '成功率')}
+                {actualSortHeader('routeVerifiedRate', '路由验证')}
+                {actualSortHeader('tokens', 'Token')}
+                {actualSortHeader('grade', '评级')}
+                <TestResultActionHeader />
+              </TestResultTableHeader>
+            ) : (
+              <TestResultTableHeader columnsClassName={LINK_TABLE_COLUMNS}>
+                {sortHeader('name', '节点')}
+                {sortHeader('score', '综合耗时')}
+                {sortHeader('tunnelMs', 'CONNECT')}
+                {sortHeader('tlsMs', 'TLS')}
+                {sortHeader('httpsTtfbMs', 'HTTPS')}
+                {sortHeader('websocketMs', 'WebSocket')}
+                {sortHeader('successRate', '成功率')}
+                {sortHeader('grade', '评级')}
+                <TestResultActionHeader />
+              </TestResultTableHeader>
+            )}
+
+            {activeRows.length === 0 ? (
+              <TestResultEmptyState />
+            ) : (
+              <TestResultVirtualRows
+                items={activeRows}
+                itemKey={(proxy) => proxy.name}
+                itemContent={renderRow}
+              />
+            )}
+          </TestResultTableViewport>
+        </div>
+      </section>
+    </TestPageShell>
   )
 }
 

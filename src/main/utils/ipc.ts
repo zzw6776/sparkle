@@ -144,7 +144,11 @@ import {
   mihomoProxySpeedTest
 } from '../core/speedTest'
 import { cancelMihomoCodexTest, mihomoCodexTest } from '../core/codexTest'
-import { cancelMihomoCodexActualTest, mihomoCodexActualTest } from '../core/codexActualTest'
+import {
+  cancelMihomoCodexActualTest,
+  listCodexActualTestModels,
+  mihomoCodexActualTest
+} from '../core/codexActualTest'
 import { cancelMihomoProcessTest, mihomoProcessTest } from '../core/processTest'
 
 function ipcErrorWrapper<T>( // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -288,11 +292,13 @@ export function registerIpcMainHandlers(): void {
     )
   )
   ipcMain.handle('cancelMihomoCodexTest', () => cancelMihomoCodexTest())
-  ipcMain.handle('mihomoCodexActualTest', (event, proxies, rounds, concurrency) =>
+  ipcMain.handle('listCodexActualTestModels', () => ipcErrorWrapper(listCodexActualTestModels)())
+  ipcMain.handle('mihomoCodexActualTest', (event, proxies, rounds, concurrency, options) =>
     ipcErrorWrapper(mihomoCodexActualTest)(
       proxies,
       rounds,
       concurrency,
+      options,
       (progress: CodexActualTestProgress) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send('mihomoCodexActualTestProgress', progress)

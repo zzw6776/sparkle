@@ -36,12 +36,28 @@ function createIdleSnapshot(): ProcessTestStoreSnapshot {
 }
 
 let snapshot = createIdleSnapshot()
+let memoryReleased = false
 let generation = 0
 const listeners = new Set<() => void>()
 let pendingProgress: ProcessTestProgress | undefined
 let pendingResults: Record<string, ProcessTestResult> = {}
 let progressTimer: number | undefined
 let progressFlushInterval = 100
+
+function hydrateMemory(): void {
+  if (!memoryReleased) return
+  persistedHistory = readTestHistory<PersistedProcessTestHistory>(PROCESS_TEST_HISTORY_KEY)
+  snapshot = createIdleSnapshot()
+  memoryReleased = false
+}
+
+function releaseMemoryIfIdle(): void {
+  if (memoryReleased || listeners.size > 0 || snapshot.testing) return
+  clearPendingProcessTestProgress()
+  persistedHistory = undefined
+  snapshot = { results: {}, testing: false, cancelling: false }
+  memoryReleased = true
+}
 
 function updateSnapshot(patch: Partial<ProcessTestStoreSnapshot>): void {
   snapshot = { ...snapshot, ...patch }
@@ -75,11 +91,16 @@ function clearPendingProcessTestProgress(): void {
 }
 
 export function subscribeProcessTestStore(listener: () => void): () => void {
+  hydrateMemory()
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+    releaseMemoryIfIdle()
+  }
 }
 
 export function getProcessTestSnapshot(): ProcessTestStoreSnapshot {
+  hydrateMemory()
   return snapshot
 }
 
@@ -147,6 +168,7 @@ export async function runProcessTest(
   } finally {
     if (currentGeneration === generation) {
       updateSnapshot({ testing: false, cancelling: false, progress: undefined })
+      releaseMemoryIfIdle()
     }
   }
 }
@@ -165,8 +187,11 @@ function resetProcessTestStore(): void {
   generation++
   clearPendingProcessTestProgress()
   if (snapshot.testing) void cancelMihomoProcessTest()
+  persistedHistory = readTestHistory<PersistedProcessTestHistory>(PROCESS_TEST_HISTORY_KEY)
   snapshot = createIdleSnapshot()
+  memoryReleased = false
   listeners.forEach((listener) => listener())
+  releaseMemoryIfIdle()
 }
 
 const unsubscribeProgress = window.electron.ipcRenderer.on(

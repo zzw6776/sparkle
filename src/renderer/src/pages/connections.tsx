@@ -42,7 +42,9 @@ import {
   isConnectionFilterCompletionSessionActive
 } from '@renderer/utils/connection-filter-autocomplete'
 import {
+  getRetainedConnectionHistory,
   processTestKey,
+  releaseProcessTestTargetMemory,
   selectProcessTestProcess,
   updateProcessTestConnections
 } from '@renderer/utils/process-test-targets'
@@ -63,13 +65,21 @@ const Connections: React.FC = () => {
     displayAppName = true,
     connectionGroupByProcess = false,
     connectionGroupSort = 'name',
-    connectionGroupDirection = 'asc'
+    connectionGroupDirection = 'asc',
+    connectionPinnedProcesses = []
   } = appConfig || {}
+  const [initialConnections] = useState<ControllerConnectionDetail[]>(() => {
+    const retained =
+      cachedConnections.length > 0 ? cachedConnections : getRetainedConnectionHistory()
+    cachedConnections = retained
+    return retained
+  })
   const [connectionsInfo, setConnectionsInfo] = useState<ControllerConnections>()
   const [allConnections, setAllConnections] =
-    useState<ControllerConnectionDetail[]>(cachedConnections)
+    useState<ControllerConnectionDetail[]>(initialConnections)
   const [activeConnections, setActiveConnections] = useState<ControllerConnectionDetail[]>([])
-  const [closedConnections, setClosedConnections] = useState<ControllerConnectionDetail[]>([])
+  const [closedConnections, setClosedConnections] =
+    useState<ControllerConnectionDetail[]>(initialConnections)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [isSettingDrawerOpen, setIsSettingDrawerOpen] = useState(false)
   const [settingDrawerReopenSignal, setSettingDrawerReopenSignal] = useState(0)
@@ -101,6 +111,8 @@ const Connections: React.FC = () => {
   const filteredConnectionsRef = useRef<ControllerConnectionDetail[]>([])
   const iconMapRef = useRef<Record<string, string>>({})
   const appNameCacheRef = useRef<Record<string, string>>({})
+  const pinnedProcessesRef = useRef(connectionPinnedProcesses)
+  const patchAppConfigRef = useRef(patchAppConfig)
 
   const lastActiveTime = useRef<Map<string, number>>(new Map())
   const [isFilterFocused, setIsFilterFocused] = useState(false)
@@ -194,15 +206,26 @@ const Connections: React.FC = () => {
   ])
 
   const grouped = connectionGroupByProcess
+  const pinnedProcessKeys = useMemo(
+    () => new Set(connectionPinnedProcesses.filter(Boolean)),
+    [connectionPinnedProcesses]
+  )
 
   const connectionGroups = useMemo<ConnectionGroup[]>(() => {
     if (!grouped) return []
     return buildConnectionGroups(
       filteredConnections,
       connectionGroupSort,
-      connectionGroupDirection === 'asc'
+      connectionGroupDirection === 'asc',
+      connectionPinnedProcesses
     )
-  }, [grouped, filteredConnections, connectionGroupSort, connectionGroupDirection])
+  }, [
+    grouped,
+    filteredConnections,
+    connectionGroupSort,
+    connectionGroupDirection,
+    connectionPinnedProcesses
+  ])
 
   const { groupCounts, flatMembers, flatMemberLocalIndex } = useMemo(() => {
     const counts: number[] = []
@@ -248,6 +271,8 @@ const Connections: React.FC = () => {
   filteredConnectionsRef.current = filteredConnections
   iconMapRef.current = iconMap
   appNameCacheRef.current = appNameCache
+  pinnedProcessesRef.current = connectionPinnedProcesses
+  patchAppConfigRef.current = patchAppConfig
 
   const trashAllClosedConnection = useCallback((): void => {
     setClosedConnections((closedConns) => {
@@ -319,6 +344,15 @@ const Connections: React.FC = () => {
     if (!group) return
     const close = closeConnectionRef.current
     group.connections.forEach((conn) => close(conn.id))
+  }, [])
+
+  const togglePinnedProcess = useCallback((key: string): void => {
+    const current = pinnedProcessesRef.current.filter(Boolean)
+    const next = current.includes(key)
+      ? current.filter((item) => item !== key)
+      : [key, ...current.filter((item) => item !== key)]
+    pinnedProcessesRef.current = next
+    void patchAppConfigRef.current({ connectionPinnedProcesses: next })
   }, [])
 
   useEffect(() => {
@@ -423,6 +457,14 @@ const Connections: React.FC = () => {
   useEffect(() => {
     updateProcessTestConnections(allConnections)
   }, [allConnections])
+
+  useEffect(
+    () => () => {
+      cachedConnections = []
+      releaseProcessTestTargetMemory()
+    },
+    []
+  )
 
   const processAppNameQueue = useCallback(async () => {
     if (processingAppNames.current.size >= 3 || appNameRequestQueue.current.size === 0) return
@@ -887,13 +929,21 @@ const Connections: React.FC = () => {
           displayIcon={showIcon}
           iconUrl={iconUrl}
           displayName={displayName}
+          isPinned={pinnedProcessKeys.has(group.key)}
           onToggle={toggleGroupStable}
           onCloseAll={closeGroupStable}
           onSpeedTest={openProcessTest}
+          onPin={togglePinnedProcess}
         />
       )
     },
-    [toggleGroupStable, closeGroupStable, openProcessTest]
+    [
+      toggleGroupStable,
+      closeGroupStable,
+      openProcessTest,
+      pinnedProcessKeys,
+      togglePinnedProcess
+    ]
   )
 
   return (

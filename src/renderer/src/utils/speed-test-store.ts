@@ -253,11 +253,19 @@ export async function runConcurrentGroupSpeedTest(
   } finally {
     if (generation === storeGeneration) {
       concurrentCompletionHandler = undefined
+      const tests = { ...snapshot.tests }
+      const errors = { ...snapshot.errors }
+      proxies.forEach((proxy) => {
+        delete tests[proxy]
+        delete errors[proxy]
+      })
       updateSnapshot({
         activeGroup: undefined,
         busy: false,
         testing: new Set(),
-        progresses: {}
+        progresses: {},
+        tests,
+        errors
       })
     }
   }

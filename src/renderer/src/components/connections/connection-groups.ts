@@ -28,7 +28,8 @@ export function groupKey(conn: ControllerConnectionDetail): string {
 export function buildConnectionGroups(
   connections: ControllerConnectionDetail[],
   sort: ConnectionGroupSort,
-  asc: boolean
+  asc: boolean,
+  pinnedKeys: readonly string[] = []
 ): ConnectionGroup[] {
   const groups = new Map<string, ConnectionGroup>()
 
@@ -66,7 +67,17 @@ export function buildConnectionGroups(
 
   const rows = Array.from(groups.values())
   sortGroups(rows, sort, asc)
-  return rows
+  if (pinnedKeys.length === 0) return rows
+
+  const pinnedOrder = new Map<string, number>()
+  pinnedKeys.forEach((key, index) => {
+    if (key && !pinnedOrder.has(key)) pinnedOrder.set(key, index)
+  })
+  const pinned = rows
+    .filter((row) => pinnedOrder.has(row.key))
+    .sort((a, b) => pinnedOrder.get(a.key)! - pinnedOrder.get(b.key)!)
+  const unpinned = rows.filter((row) => !pinnedOrder.has(row.key))
+  return [...pinned, ...unpinned]
 }
 
 function sortGroups(rows: ConnectionGroup[], sort: ConnectionGroupSort, asc: boolean): void {

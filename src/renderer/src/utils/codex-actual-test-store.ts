@@ -39,6 +39,7 @@ function createIdleSnapshot(): CodexActualTestStoreSnapshot {
 }
 
 let snapshot = createIdleSnapshot()
+let memoryReleased = false
 let generation = 0
 let nextLogId = 0
 const listeners = new Set<() => void>()
@@ -46,10 +47,25 @@ let pendingProgresses: CodexActualTestProgress[] = []
 let progressTimer: number | undefined
 let progressFlushInterval = 100
 
+function hydrateMemory(): void {
+  if (!memoryReleased) return
+  persistedHistory = readTestHistory<PersistedCodexActualTestHistory>(CODEX_ACTUAL_TEST_HISTORY_KEY)
+  snapshot = createIdleSnapshot()
+  memoryReleased = false
+}
+
+function releaseMemoryIfIdle(): void {
+  if (memoryReleased || listeners.size > 0 || snapshot.testing) return
+  clearPendingProgress()
+  persistedHistory = undefined
+  snapshot = { results: {}, logs: [], testing: false, cancelling: false }
+  memoryReleased = true
+}
+
 function logEntry(
   message: string,
   level: CodexActualTestLogLevel = 'info',
-  context?: { proxy?: string; round?: number }
+  context?: { proxy?: string; worker?: number; round?: number }
 ): CodexActualTestLogEntry {
   return {
     id: `${Date.now()}-${nextLogId++}`,
@@ -71,7 +87,7 @@ function metric(value?: number): string {
 }
 
 function progressLogs(progress: CodexActualTestProgress): CodexActualTestLogEntry[] {
-  const context = { proxy: progress.proxy, round: progress.round }
+  const context = { proxy: progress.proxy, worker: progress.worker, round: progress.round }
   if (progress.stage === 'selecting') {
     return [logEntry('正在切换隐藏测速通道并关闭旧连接', 'info', context)]
   }
@@ -82,6 +98,7 @@ function progressLogs(progress: CodexActualTestProgress): CodexActualTestLogEntr
     const unavailableHint = '未获取到（若刚更新测试功能，请重启 Sparkle 后重试）'
     return [
       logEntry(`模型：${progress.model || unavailableHint}`, 'info', context),
+      logEntry(`推理深度：${progress.reasoningEffort || '跟随模型默认'}`, 'info', context),
       logEntry(`发送：${progress.request || unavailableHint}`, 'info', context),
       logEntry('真实请求已发送，正在等待 Codex 返回', 'info', context)
     ]
@@ -156,11 +173,16 @@ function clearPendingProgress(): void {
 }
 
 export function subscribeCodexActualTestStore(listener: () => void): () => void {
+  hydrateMemory()
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+    releaseMemoryIfIdle()
+  }
 }
 
 export function getCodexActualTestSnapshot(): CodexActualTestStoreSnapshot {
+  hydrateMemory()
   return snapshot
 }
 
@@ -168,7 +190,8 @@ export async function runCodexActualTest(
   proxies: string[],
   rounds = 1,
   concurrency = 2,
-  groupName?: string
+  groupName?: string,
+  options: CodexActualTestOptions = {}
 ): Promise<void> {
   if (snapshot.testing) {
     notify('已有 Codex 真实响应测试正在进行')
@@ -189,7 +212,11 @@ export async function runCodexActualTest(
   }
   updateSnapshot({
     results: {},
-    logs: [logEntry(`开始测试 ${proxies.length} 个节点，共 ${rounds} 轮，并发 ${concurrency}`)],
+    logs: [
+      logEntry(
+        `开始测试 ${proxies.length} 个节点，共 ${rounds} 轮，并发 ${concurrency}；模型 ${options.model || 'Codex 默认'}；推理深度 ${options.reasoningEffort || '模型默认'}`
+      )
+    ],
     groupName,
     testing: true,
     cancelling: false,
@@ -198,7 +225,7 @@ export async function runCodexActualTest(
   })
 
   try {
-    const results = await mihomoCodexActualTest(proxies, rounds, concurrency)
+    const results = await mihomoCodexActualTest(proxies, rounds, concurrency, options)
     if (currentGeneration !== generation) return
     flushProgress()
     const resultMap = Object.fromEntries(results.map((result) => [result.proxy, result]))
@@ -247,6 +274,7 @@ export async function runCodexActualTest(
         updateSnapshot({ savedAt })
       }
       updateSnapshot({ testing: false, cancelling: false, progress: undefined })
+      releaseMemoryIfIdle()
     }
   }
 }
@@ -265,8 +293,11 @@ function resetCodexActualTestStore(): void {
   generation++
   clearPendingProgress()
   if (snapshot.testing) void cancelMihomoCodexActualTest()
+  persistedHistory = readTestHistory<PersistedCodexActualTestHistory>(CODEX_ACTUAL_TEST_HISTORY_KEY)
   snapshot = createIdleSnapshot()
+  memoryReleased = false
   listeners.forEach((listener) => listener())
+  releaseMemoryIfIdle()
 }
 
 const unsubscribeProgress = window.electron.ipcRenderer.on(

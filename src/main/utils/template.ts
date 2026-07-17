@@ -23,6 +23,7 @@ export const defaultConfig: AppConfig = {
   connectionGroupByProcess: false,
   connectionGroupSort: 'name',
   connectionGroupDirection: 'asc',
+  connectionPinnedProcesses: [],
   connectionInterval: 500,
   gistSyncEnabled: false,
   gistEncrypted: false,
@@ -76,6 +77,10 @@ export const defaultConfig: AppConfig = {
   generalTestNodeConcurrency: 1,
   generalTestConfigExpanded: false,
   codexTestConcurrency: 6,
+  codexActualTestConcurrency: 2,
+  codexActualTestModel: '',
+  codexActualTestReasoningEffort: '',
+  processTestConcurrency: 6,
   showProxyDetailTooltip: false
 }
 

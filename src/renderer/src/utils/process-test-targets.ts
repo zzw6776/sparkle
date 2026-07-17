@@ -22,10 +22,17 @@ export interface ProcessTestTargetCatalog {
 
 let connections =
   readTestHistory<ControllerConnectionDetail[]>(PROCESS_CONNECTION_HISTORY_KEY) || []
+let connectionsReleased = false
 let selectedProcessKey: string | undefined
 let persistTimer: number | undefined
 let catalogBuildTimer: number | undefined
 let catalogCache: ProcessTestTargetCatalog[] | undefined
+
+function hydrateConnections(): void {
+  if (!connectionsReleased) return
+  connections = readTestHistory<ControllerConnectionDetail[]>(PROCESS_CONNECTION_HISTORY_KEY) || []
+  connectionsReleased = false
+}
 
 function scheduleCatalogBuild(): void {
   catalogCache = undefined
@@ -56,6 +63,7 @@ export function processTestKey(
 
 export function updateProcessTestConnections(nextConnections: ControllerConnectionDetail[]): void {
   connections = nextConnections
+  connectionsReleased = false
   scheduleCatalogBuild()
   schedulePersistConnections()
 }
@@ -63,6 +71,7 @@ export function updateProcessTestConnections(nextConnections: ControllerConnecti
 export function updateActiveProcessTestConnections(
   activeConnections: ControllerConnectionDetail[]
 ): void {
+  hydrateConnections()
   const activeIds = new Set(activeConnections.map((connection) => connection.id))
   const retained = connections
     .filter((connection) => !activeIds.has(connection.id))
@@ -144,6 +153,7 @@ function parseTarget(
 }
 
 function buildProcessTestCatalog(): ProcessTestTargetCatalog[] {
+  hydrateConnections()
   const catalogs = new Map<
     string,
     ProcessTestTargetCatalog & { domainMap: Map<string, ProcessTestDomainTarget> }
@@ -211,6 +221,31 @@ export function getProcessTestCatalog(): ProcessTestTargetCatalog[] {
     catalogCache = buildProcessTestCatalog()
   }
   return catalogCache
+}
+
+export function getRetainedConnectionHistory(): ControllerConnectionDetail[] {
+  hydrateConnections()
+  return connections.map((connection) => ({
+    ...connection,
+    isActive: false,
+    uploadSpeed: 0,
+    downloadSpeed: 0
+  }))
+}
+
+export function releaseProcessTestTargetMemory(): void {
+  if (persistTimer !== undefined) {
+    window.clearTimeout(persistTimer)
+    persistTimer = undefined
+    writeTestHistory(PROCESS_CONNECTION_HISTORY_KEY, connections)
+  }
+  if (catalogBuildTimer !== undefined) {
+    window.clearTimeout(catalogBuildTimer)
+    catalogBuildTimer = undefined
+  }
+  connections = []
+  catalogCache = undefined
+  connectionsReleased = true
 }
 
 scheduleCatalogBuild()

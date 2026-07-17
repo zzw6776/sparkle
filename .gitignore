@@ -3,6 +3,7 @@ resources/files
 resources/sidecar
 extra
 dist
+dist-*
 out
 .sparkle-dev
 .DS_Store

@@ -4,6 +4,8 @@ directories:
   buildResources: build
 files:
   - '!**/.vscode/*'
+  - '!.sparkle-dev/**/*'
+  - '!dist*/**/*'
   - '!src/*'
   - '!aur/*'
   - '!images/*'
@@ -40,6 +42,9 @@ nsis:
 mac:
   target:
     - pkg
+  # Local and CI builds use ad-hoc signing and do not require an Apple Developer identity.
+  identity: '-'
+  hardenedRuntime: false
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.

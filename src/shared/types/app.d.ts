@@ -101,6 +101,27 @@ interface CodexTestResult {
 
 type CodexActualTestStage = 'selecting' | 'starting' | 'requesting' | 'streaming' | 'completed'
 
+type CodexRuntimeState =
+  'unsupported' | 'missing' | 'downloading' | 'verifying' | 'installing' | 'ready' | 'error'
+
+type CodexRuntimeSource = 'custom' | 'managed' | 'system'
+type CodexRuntimePreference = 'managed' | 'system'
+
+interface CodexRuntimeStatus {
+  state: CodexRuntimeState
+  source: CodexRuntimeSource
+  supported: boolean
+  version: string
+  target?: string
+  binary?: string
+  archiveBytes?: number
+  downloadedBytes?: number
+  totalBytes?: number
+  bytesPerSecond?: number
+  installedAt?: number
+  error?: string
+}
+
 interface CodexActualTestReasoningEffortOption {
   reasoningEffort: string
   description: string
@@ -379,6 +400,7 @@ interface AppConfig {
   codexActualTestConcurrency?: number
   codexActualTestModel?: string
   codexActualTestReasoningEffort?: string
+  codexRuntimePreference?: CodexRuntimePreference
   processTestConcurrency?: number
   encryptedPassword?: number[]
   rememberProxyGroupOpenState?: boolean

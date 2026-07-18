@@ -1,4 +1,4 @@
-import { Button, Chip } from '@heroui/react'
+import { Button, Chip, Progress } from '@heroui/react'
 import {
   FOLLOW_TEST_GROUP,
   TestGroupSelectors,
@@ -42,6 +42,10 @@ import {
 } from '@renderer/utils/codex-actual-test-store'
 import { formatLatency } from '@renderer/utils/format-latency'
 import {
+  applyCodexRuntimePreference,
+  cancelCodexRuntimeInstall,
+  getCodexRuntimeStatus,
+  installCodexRuntime,
   listCodexActualTestModels,
   mihomoChangeProxy,
   mihomoCloseConnections
@@ -49,6 +53,7 @@ import {
 import { notify } from '@renderer/utils/notification'
 import { isTestableProxy } from '@renderer/utils/testable-proxy'
 import { copyText } from '@renderer/utils/clipboard'
+import { calcTraffic } from '@renderer/utils/calc'
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { MdCheckCircle, MdContentCopy, MdErrorOutline } from 'react-icons/md'
 import { Virtuoso } from 'react-virtuoso'
@@ -706,6 +711,126 @@ const ActualLogPanel = memo<ActualLogPanelProps>(({ logs, expanded, onToggle, on
 })
 
 ActualLogPanel.displayName = 'ActualLogPanel'
+
+interface CodexRuntimePanelProps {
+  status?: CodexRuntimeStatus
+  preference: CodexRuntimePreference
+  disabled: boolean
+  onPreferenceChange: (preference: CodexRuntimePreference) => void
+  onInstall: () => void
+  onCancel: () => void
+}
+
+const CodexRuntimePanel = memo<CodexRuntimePanelProps>(
+  ({ status, preference, disabled, onPreferenceChange, onInstall, onCancel }) => {
+    if (!status?.supported) return null
+    const busy = ['downloading', 'verifying', 'installing'].includes(status.state)
+    const usingCustom = status.source === 'custom'
+    const usingSystem = !usingCustom && preference === 'system'
+    const progress =
+      status.downloadedBytes !== undefined && status.totalBytes
+        ? Math.min(100, (status.downloadedBytes / status.totalBytes) * 100)
+        : undefined
+    const stateLabel = usingCustom
+      ? status.state === 'ready'
+        ? '自定义运行时'
+        : '自定义路径无效'
+      : usingSystem
+        ? '当前使用本机 Codex'
+        : status.state === 'ready'
+          ? '托管运行时已就绪'
+          : status.state === 'downloading'
+            ? '正在下载'
+            : status.state === 'verifying'
+              ? '正在校验'
+              : status.state === 'installing'
+                ? '正在安装'
+                : status.state === 'error'
+                  ? '安装失败'
+                  : '托管运行时未安装'
+    const chipColor = usingSystem
+      ? 'primary'
+      : status.state === 'ready'
+        ? 'success'
+        : status.state === 'error'
+          ? 'danger'
+          : busy
+            ? 'primary'
+            : 'default'
+
+    return (
+      <div className="mb-2 rounded-lg border border-divider/70 bg-content1/70 px-3 py-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-foreground">Codex Runtime</span>
+              <Chip size="sm" variant="flat" color={chipColor}>
+                {stateLabel}
+              </Chip>
+              {!usingSystem && status.source === 'managed' && status.state === 'ready' && (
+                <span className="text-foreground-500">v{status.version}</span>
+              )}
+            </div>
+            <div className="mt-1 text-foreground-500">
+              {usingCustom
+                ? '由 SPARKLE_CODEX_BINARY 强制指定，移除环境变量并重启后才能切换来源。'
+                : usingSystem
+                  ? `真实响应测试使用电脑上安装的 Codex；Sparkle 不负责其版本和更新。${status.error ? ` 托管版本状态：${status.error}` : ''}`
+                  : status.state === 'ready'
+                    ? '真实响应测试使用由 Sparkle 固定版本并校验完整性的托管运行时。'
+                    : status.error ||
+                      `需要先安装 Sparkle 托管版本（${calcTraffic(status.archiveBytes || 0)}）。`}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-end gap-2">
+            {!usingCustom && (
+              <TestOptionSelect
+                label="运行时来源"
+                value={preference}
+                options={[
+                  { key: 'system', label: '本机安装' },
+                  { key: 'managed', label: 'Sparkle 托管' }
+                ]}
+                disabled={disabled || busy}
+                className="w-40"
+                onChange={(value) => onPreferenceChange(value as CodexRuntimePreference)}
+              />
+            )}
+            {!usingCustom && status.state !== 'ready' && (
+              <Button
+                size="sm"
+                color={status.state === 'error' ? 'danger' : 'primary'}
+                variant={status.state === 'error' ? 'flat' : 'solid'}
+                className="shrink-0"
+                isDisabled={disabled && !busy}
+                onPress={busy ? onCancel : onInstall}
+              >
+                {busy ? '取消' : status.state === 'error' ? '重试安装' : '安装托管版本'}
+              </Button>
+            )}
+          </div>
+        </div>
+        {busy && (
+          <Progress
+            size="sm"
+            className="mt-2"
+            value={progress}
+            isIndeterminate={progress === undefined || status.state !== 'downloading'}
+            aria-label="Codex Runtime 安装进度"
+            label={
+              status.state === 'downloading'
+                ? `${calcTraffic(status.downloadedBytes || 0)} / ${calcTraffic(status.totalBytes || status.archiveBytes || 0)}${status.bytesPerSecond ? ` · ${calcTraffic(status.bytesPerSecond)}/s` : ''}`
+                : stateLabel
+            }
+            showValueLabel={status.state === 'downloading' && progress !== undefined}
+          />
+        )}
+      </div>
+    )
+  }
+)
+
+CodexRuntimePanel.displayName = 'CodexRuntimePanel'
 /* eslint-enable react/prop-types */
 
 const CodexTest: React.FC = () => {
@@ -732,6 +857,7 @@ const CodexTest: React.FC = () => {
   const [actualModels, setActualModels] = useState<CodexActualTestModelOption[]>([])
   const [actualModelsLoading, setActualModelsLoading] = useState(true)
   const [actualModelsError, setActualModelsError] = useState<string>()
+  const [codexRuntimeStatus, setCodexRuntimeStatus] = useState<CodexRuntimeStatus>()
   const [actualModel, setActualModel] = useState(
     () => appConfig?.codexActualTestModel || DEFAULT_CODEX_OPTION
   )
@@ -771,7 +897,6 @@ const CodexTest: React.FC = () => {
     setItemSelected: changeLinkSelection,
     setAllSelected: setAllLinkSelected
   } = useDefaultAllSelection(group?.name, proxyNames)
-  const proxyKey = useMemo(() => proxies.map((proxy) => proxy.name).join('\u0000'), [proxies])
   const visibleResults =
     state.groupName && group?.name !== state.groupName ? EMPTY_LINK_RESULTS : state.results
   const visibleActualResults =
@@ -779,6 +904,18 @@ const CodexTest: React.FC = () => {
       ? EMPTY_ACTUAL_RESULTS
       : actualState.results
   const anyTesting = state.testing || actualState.testing
+  const codexRuntimePreference: CodexRuntimePreference =
+    appConfig?.codexRuntimePreference ||
+    (codexRuntimeStatus?.source === 'managed' && codexRuntimeStatus.state === 'ready'
+      ? 'managed'
+      : 'system')
+  const codexRuntimeBusy = ['downloading', 'verifying', 'installing'].includes(
+    codexRuntimeStatus?.state || ''
+  )
+  const codexRuntimeBlocked =
+    codexRuntimeBusy ||
+    (codexRuntimeStatus?.source === 'custom' && codexRuntimeStatus.state === 'error') ||
+    (codexRuntimePreference === 'managed' && codexRuntimeStatus?.state !== 'ready')
   const actualTopLimit = parseTopCount(actualTopCount, proxies.length)
   const concurrencyMax = mode === 'actual' ? 4 : MAX_CONCURRENCY
   const currentConcurrencyInput = mode === 'actual' ? actualConcurrencyInput : concurrencyInput
@@ -826,14 +963,6 @@ const CodexTest: React.FC = () => {
         : [{ key: DEFAULT_CODEX_OPTION, label: '跟随模型默认' }],
     [selectedActualModel]
   )
-  const linkScoreKey = useMemo(
-    () =>
-      proxies
-        .map((proxy) => `${proxy.name}:${visibleResults[proxy.name]?.score ?? ''}`)
-        .join('\u0000'),
-    [proxies, visibleResults]
-  )
-
   useEffect(() => {
     if (!groupName && groups[0]) {
       const historyGroup = groups.find(
@@ -843,10 +972,10 @@ const CodexTest: React.FC = () => {
     }
   }, [actualState.groupName, groupName, groups, state.groupName])
 
-  useEffect(() => {
+  const refreshActualModels = useCallback(() => {
     let cancelled = false
     setActualModelsLoading(true)
-    void listCodexActualTestModels()
+    const promise = listCodexActualTestModels()
       .then((models) => {
         if (cancelled) return
         setActualModels(models)
@@ -859,9 +988,69 @@ const CodexTest: React.FC = () => {
       .finally(() => {
         if (!cancelled) setActualModelsLoading(false)
       })
+    return {
+      promise,
+      cancel: () => {
+        cancelled = true
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const request = refreshActualModels()
+    return () => {
+      request.cancel()
+    }
+  }, [refreshActualModels])
+
+  useEffect(() => {
+    let cancelled = false
+    void getCodexRuntimeStatus().then((status) => {
+      if (!cancelled) setCodexRuntimeStatus(status)
+    })
+    const unsubscribe = window.electron.ipcRenderer.on(
+      'codexRuntimeStatus',
+      (_event, status: CodexRuntimeStatus) => setCodexRuntimeStatus(status)
+    )
     return () => {
       cancelled = true
+      unsubscribe()
     }
+  }, [])
+
+  const installManagedCodexRuntime = useCallback(() => {
+    void installCodexRuntime()
+      .then((status) => {
+        setCodexRuntimeStatus(status)
+        if (status.state === 'ready') {
+          refreshActualModels()
+          notify('Codex Runtime 安装完成', { variant: 'success' })
+        }
+      })
+      .catch((error) => {
+        notify('Codex Runtime 安装失败', { body: String(error), variant: 'danger' })
+        void getCodexRuntimeStatus().then(setCodexRuntimeStatus)
+      })
+  }, [refreshActualModels])
+
+  const changeCodexRuntimePreference = useCallback(
+    (preference: CodexRuntimePreference) => {
+      void patchAppConfig({ codexRuntimePreference: preference }).then(async (nextConfig) => {
+        if (!nextConfig) return
+        try {
+          const status = await applyCodexRuntimePreference()
+          setCodexRuntimeStatus(status)
+          refreshActualModels()
+        } catch (error) {
+          notify('Codex Runtime 来源切换失败', { body: String(error), variant: 'danger' })
+        }
+      })
+    },
+    [patchAppConfig, refreshActualModels]
+  )
+
+  const cancelManagedCodexRuntime = useCallback(() => {
+    void cancelCodexRuntimeInstall()
   }, [])
 
   useEffect(() => {
@@ -895,18 +1084,6 @@ const CodexTest: React.FC = () => {
       setSwitchGroupName(FOLLOW_TEST_GROUP)
     }
   }, [groups, switchGroupName])
-
-  useEffect(() => {
-    if (actualTopLimit === undefined || actualState.testing) return
-    const ranked = fastestLinkProxies(proxies, visibleResults, actualTopLimit)
-    const nextNames = ranked.map((proxy) => proxy.name)
-    setActualSelected((current) => {
-      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
-        return current
-      }
-      return new Set(nextNames)
-    })
-  }, [actualState.testing, actualTopLimit, linkScoreKey, proxyKey])
 
   useEffect(() => {
     if (!state.testing) {
@@ -1089,6 +1266,18 @@ const CodexTest: React.FC = () => {
     })
   }, [])
 
+  const changeActualTopCount = useCallback(
+    (value: string): void => {
+      setActualTopCount(value)
+      const limit = parseTopCount(value, proxies.length)
+      if (limit === undefined) return
+      setActualSelected(
+        new Set(fastestLinkProxies(proxies, visibleResults, limit).map((proxy) => proxy.name))
+      )
+    },
+    [proxies, visibleResults]
+  )
+
   const toggleActualLogs = useCallback(() => {
     setActualLogExpanded((current) => !current)
   }, [])
@@ -1219,7 +1408,7 @@ const CodexTest: React.FC = () => {
                 label="模型"
                 value={actualModel}
                 options={actualModelOptions}
-                disabled={anyTesting || actualModelsLoading}
+                disabled={anyTesting || actualModelsLoading || codexRuntimeBusy}
                 loading={actualModelsLoading}
                 className="min-w-48 flex-1"
                 onChange={changeActualModel}
@@ -1228,7 +1417,7 @@ const CodexTest: React.FC = () => {
                 label="推理深度"
                 value={actualReasoningEffort}
                 options={actualReasoningOptions}
-                disabled={anyTesting || actualModelsLoading}
+                disabled={anyTesting || actualModelsLoading || codexRuntimeBusy}
                 loading={actualModelsLoading}
                 className="w-44"
                 onChange={changeActualReasoningEffort}
@@ -1284,7 +1473,7 @@ const CodexTest: React.FC = () => {
                     ? '当前没有可选节点'
                     : `请输入 1-${proxies.length} 的整数`
               }
-              onValueChange={setActualTopCount}
+              onValueChange={changeActualTopCount}
             />
           )}
 
@@ -1296,7 +1485,8 @@ const CodexTest: React.FC = () => {
             disabled={
               selectedNames.length === 0 ||
               currentConcurrency === undefined ||
-              (mode === 'actual' && (actualTopLimit === undefined || actualModelsLoading))
+              (mode === 'actual' &&
+                (actualTopLimit === undefined || actualModelsLoading || codexRuntimeBlocked))
             }
             startLabel={`${mode === 'actual' ? '真实测试' : '测试'} ${selectedNames.length} 个节点`}
             onStart={() =>
@@ -1328,7 +1518,15 @@ const CodexTest: React.FC = () => {
           </div>
         ) : (
           <div className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-foreground-600">
-            使用本机已登录的官方 Codex 发起真实模型请求。每轮都会消耗 Codex
+            <CodexRuntimePanel
+              status={codexRuntimeStatus}
+              preference={codexRuntimePreference}
+              disabled={anyTesting}
+              onPreferenceChange={changeCodexRuntimePreference}
+              onInstall={installManagedCodexRuntime}
+              onCancel={cancelManagedCodexRuntime}
+            />
+            使用本机 Codex 登录信息发起真实模型请求。每轮都会消耗 Codex
             配额；测试使用极简模式：不读取项目说明，关闭搜索、插件、MCP、浏览器、图片、子代理和执行类工具，并默认选择模型支持的最低推理深度。Codex
             平台固定的系统上下文仍无法移除。请求在只读临时目录运行，并验证连接确实经过当前隐藏测速通道。建议先运行链路测试，再用“选中链路最快前
             X 个”筛选节点。

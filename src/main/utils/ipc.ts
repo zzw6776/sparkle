@@ -147,9 +147,15 @@ import {
 import { cancelMihomoCodexTest, mihomoCodexTest } from '../core/codexTest'
 import {
   cancelMihomoCodexActualTest,
+  invalidateCodexActualTestRuntimeCache,
   listCodexActualTestModels,
   mihomoCodexActualTest
 } from '../core/codexActualTest'
+import {
+  cancelCodexRuntimeInstall,
+  getCodexRuntimeStatus,
+  installCodexRuntime
+} from '../core/codexRuntime'
 import { cancelMihomoProcessTest, mihomoProcessTest } from '../core/processTest'
 
 function ipcErrorWrapper<T>( // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -293,6 +299,24 @@ export function registerIpcMainHandlers(): void {
     )
   )
   ipcMain.handle('cancelMihomoCodexTest', () => cancelMihomoCodexTest())
+  ipcMain.handle('getCodexRuntimeStatus', () => ipcErrorWrapper(getCodexRuntimeStatus)())
+  ipcMain.handle('applyCodexRuntimePreference', () =>
+    ipcErrorWrapper(async () => {
+      invalidateCodexActualTestRuntimeCache()
+      const [status, config] = await Promise.all([getCodexRuntimeStatus(), getAppConfig()])
+      await appendAppLog(
+        `[CodexRuntime] preference changed preference=${config.codexRuntimePreference || 'auto'} effective=${status.source}\n`
+      ).catch(() => {})
+      return status
+    })()
+  )
+  ipcMain.handle('installCodexRuntime', (event) =>
+    ipcErrorWrapper(installCodexRuntime)(async (status: CodexRuntimeStatus) => {
+      if (!event.sender.isDestroyed()) event.sender.send('codexRuntimeStatus', status)
+      if (status.state === 'ready') invalidateCodexActualTestRuntimeCache()
+    })
+  )
+  ipcMain.handle('cancelCodexRuntimeInstall', () => cancelCodexRuntimeInstall())
   ipcMain.handle('listCodexActualTestModels', () => ipcErrorWrapper(listCodexActualTestModels)())
   ipcMain.handle('mihomoCodexActualTest', (event, proxies, rounds, concurrency, options) =>
     ipcErrorWrapper(mihomoCodexActualTest)(

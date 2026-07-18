@@ -81,6 +81,7 @@ export const defaultConfig: AppConfig = {
   codexActualTestConcurrency: 2,
   codexActualTestModel: '',
   codexActualTestReasoningEffort: '',
+  codexRuntimePreference: 'system',
   processTestConcurrency: 6,
   showProxyDetailTooltip: false
 }

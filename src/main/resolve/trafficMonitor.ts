@@ -5,7 +5,28 @@ import path from 'path'
 import { existsSync } from 'fs'
 import { readFile, rm, writeFile } from 'fs/promises'
 
-let child: ChildProcess
+let child: ChildProcess | undefined
+
+function spawnMonitor(monitorPath: string, detached: boolean): Promise<ChildProcess> {
+  return new Promise((resolve, reject) => {
+    const monitor = spawn(monitorPath, [], {
+      cwd: path.dirname(monitorPath),
+      detached,
+      stdio: detached ? 'ignore' : undefined,
+      windowsHide: true
+    })
+    const handleError = (error: Error): void => {
+      monitor.removeListener('spawn', handleSpawn)
+      reject(error)
+    }
+    const handleSpawn = (): void => {
+      monitor.removeListener('error', handleError)
+      resolve(monitor)
+    }
+    monitor.once('error', handleError)
+    monitor.once('spawn', handleSpawn)
+  })
+}
 
 export async function startMonitor(detached = false): Promise<void> {
   if (process.platform !== 'win32') return
@@ -22,21 +43,23 @@ export async function startMonitor(detached = false): Promise<void> {
   await stopMonitor()
   const { showTraffic = false } = await getAppConfig()
   if (!showTraffic) return
-  child = spawn(path.join(resourcesFilesDir(), 'TrafficMonitor/TrafficMonitor.exe'), [], {
-    cwd: path.join(resourcesFilesDir(), 'TrafficMonitor'),
-    detached: detached,
-    stdio: detached ? 'ignore' : undefined
+  const monitorPath = path.join(resourcesFilesDir(), 'TrafficMonitor/TrafficMonitor.exe')
+  const monitor = await spawnMonitor(monitorPath, detached)
+  child = monitor
+  monitor.once('exit', () => {
+    if (child === monitor) child = undefined
   })
   if (detached) {
-    if (child && child.pid) {
-      await writeFile(path.join(dataDir(), 'monitor.pid'), child.pid.toString())
+    if (monitor.pid) {
+      await writeFile(path.join(dataDir(), 'monitor.pid'), monitor.pid.toString())
     }
-    child.unref()
+    monitor.unref()
   }
 }
 
 async function stopMonitor(): Promise<void> {
   if (child) {
     child.kill('SIGINT')
+    child = undefined
   }
 }

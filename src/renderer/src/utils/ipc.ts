@@ -158,6 +158,22 @@ export async function listCodexActualTestModels(): Promise<CodexActualTestModelO
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('listCodexActualTestModels'))
 }
 
+export async function getCodexRuntimeStatus(): Promise<CodexRuntimeStatus> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('getCodexRuntimeStatus'))
+}
+
+export async function applyCodexRuntimePreference(): Promise<CodexRuntimeStatus> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('applyCodexRuntimePreference'))
+}
+
+export async function installCodexRuntime(): Promise<CodexRuntimeStatus> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('installCodexRuntime'))
+}
+
+export async function cancelCodexRuntimeInstall(): Promise<boolean> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelCodexRuntimeInstall'))
+}
+
 export async function cancelMihomoCodexActualTest(): Promise<boolean> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoCodexActualTest'))
 }

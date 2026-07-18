@@ -32,6 +32,10 @@ export function subStoreDir(): string {
   return path.join(dataDir(), 'substore')
 }
 
+export function codexRuntimeDir(): string {
+  return path.join(dataDir(), 'runtime', 'codex')
+}
+
 export function subStoreFrontendDir(): string {
   return path.join(subStoreDir(), 'sub-store-frontend')
 }

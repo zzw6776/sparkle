@@ -51,7 +51,7 @@ function runDev(): number {
   const pnpmCli = process.env.npm_execpath
   const result = spawnSync(
     process.platform === 'win32' && pnpmCli ? process.execPath : 'pnpm',
-    [...(process.platform === 'win32' && pnpmCli ? [pnpmCli] : []), 'run', 'dev:app'],
+    [...(process.platform === 'win32' && pnpmCli ? [pnpmCli] : []), 'run', 'dev:electron'],
     {
       cwd: projectDir,
       stdio: 'inherit',

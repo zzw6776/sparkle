@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { getAppConfigSync } from '../config/app'
+import { managedCodexBinaryPath } from './codexRuntime'
 
 function configuredPath(value?: string): string | undefined {
   const trimmed = value?.trim()
@@ -85,7 +87,19 @@ export function getCodexBinaryCandidates(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env
 ): string[] {
-  const candidates: Array<string | undefined> = [configuredPath(env.SPARKLE_CODEX_BINARY)]
+  const override = configuredPath(env.SPARKLE_CODEX_BINARY)
+  if (override) return [override]
+
+  const useCurrentRuntimeConfig = platform === process.platform && env === process.env
+  const preference = useCurrentRuntimeConfig
+    ? getAppConfigSync().codexRuntimePreference
+    : undefined
+  const managedBinary = useCurrentRuntimeConfig ? managedCodexBinaryPath() : undefined
+  if (preference === 'managed') return managedBinary ? [managedBinary] : []
+
+  const candidates: Array<string | undefined> = [
+    preference === 'system' ? undefined : managedBinary
+  ]
   const home = configuredPath(envValue(env, platform === 'win32' ? 'USERPROFILE' : 'HOME'))
 
   if (platform === 'darwin') {

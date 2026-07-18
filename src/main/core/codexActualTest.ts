@@ -13,6 +13,7 @@ import { acquireNetworkTestChannel } from './networkTestChannel'
 
 const REQUEST_TIMEOUT = 60_000
 const RPC_TIMEOUT = 30_000
+const FEATURE_LIST_TIMEOUT = 5_000
 const MAX_ACTUAL_CONCURRENCY = 4
 const ROUTE_CHECK_INTERVAL = 100
 const ISOLATED_CODEX_HOME_PREFIX = 'sparkle-codex-home-'
@@ -96,8 +97,17 @@ let resolvedCodexBinary: string | undefined
 let cachedModelList:
   { binary: string; expiresAt: number; models: CodexActualTestModelOption[] } | undefined
 let modelListRequest: { binary: string; promise: Promise<CodexActualTestModelOption[]> } | undefined
+let supportedFeaturesRequest:
+  { binary: string; promise: Promise<ReadonlySet<string> | undefined> } | undefined
 let staleIsolatedHomeCleanup: Promise<void> | undefined
 const isolatedCodexHomes = new Set<string>()
+
+export function invalidateCodexActualTestRuntimeCache(): void {
+  resolvedCodexBinary = undefined
+  cachedModelList = undefined
+  modelListRequest = undefined
+  supportedFeaturesRequest = undefined
+}
 
 interface CodexProbeResult {
   available: boolean
@@ -373,13 +383,72 @@ async function resolveCodexBinary(): Promise<string> {
   )
 }
 
-function codexActualTestAppServerArgs(): string[] {
+function parseCodexFeatures(output: string): ReadonlySet<string> | undefined {
+  const features = new Set<string>()
+  output.split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^([a-z][a-z0-9_]*)\s+/)
+    if (match) features.add(match[1])
+  })
+  return features.size > 0 ? features : undefined
+}
+
+function querySupportedCodexFeatures(
+  binary: string,
+  env: NodeJS.ProcessEnv
+): Promise<ReadonlySet<string> | undefined> {
+  return new Promise((resolve) => {
+    let settled = false
+    let output = ''
+    let child: ChildProcess
+    try {
+      child = spawn(binary, ['features', 'list'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: codexBinaryNeedsShell(binary),
+        env,
+        windowsHide: true
+      })
+    } catch {
+      resolve(undefined)
+      return
+    }
+    const finish = (features?: ReadonlySet<string>): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(features)
+    }
+    const timer = setTimeout(() => {
+      terminateChildProcess(child, true)
+      finish()
+    }, FEATURE_LIST_TIMEOUT)
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      output = `${output}${chunk.toString()}`.slice(-64_000)
+    })
+    child.once('error', () => finish())
+    child.once('exit', (code) => finish(code === 0 ? parseCodexFeatures(output) : undefined))
+  })
+}
+
+function getSupportedCodexFeatures(
+  binary: string,
+  env: NodeJS.ProcessEnv
+): Promise<ReadonlySet<string> | undefined> {
+  if (supportedFeaturesRequest?.binary === binary) return supportedFeaturesRequest.promise
+  const promise = querySupportedCodexFeatures(binary, env)
+  supportedFeaturesRequest = { binary, promise }
+  return promise
+}
+
+function codexActualTestAppServerArgs(supportedFeatures?: ReadonlySet<string>): string[] {
+  const disabledFeatures = supportedFeatures
+    ? CODEX_ACTUAL_TEST_DISABLED_FEATURES.filter((feature) => supportedFeatures.has(feature))
+    : []
   return [
     'app-server',
     '--listen',
     'stdio://',
     ...CODEX_ACTUAL_TEST_CONFIG_OVERRIDES.flatMap((override) => ['-c', override]),
-    ...CODEX_ACTUAL_TEST_DISABLED_FEATURES.flatMap((feature) => ['--disable', feature])
+    ...disabledFeatures.flatMap((feature) => ['--disable', feature])
   ]
 }
 
@@ -439,25 +508,31 @@ class CodexAppServerClient {
     let child: ChildProcessWithoutNullStreams
     try {
       const proxyUrl = this.proxyPort ? `http://127.0.0.1:${this.proxyPort}` : undefined
-      child = spawn(this.binary, codexActualTestAppServerArgs(), {
+      const childEnv = {
+        ...process.env,
+        CODEX_HOME: isolatedHome,
+        ...(proxyUrl
+          ? {
+              HTTP_PROXY: proxyUrl,
+              HTTPS_PROXY: proxyUrl,
+              ALL_PROXY: proxyUrl,
+              http_proxy: proxyUrl,
+              https_proxy: proxyUrl,
+              all_proxy: proxyUrl
+            }
+          : {}),
+        NO_PROXY: '127.0.0.1,localhost,::1',
+        no_proxy: '127.0.0.1,localhost,::1'
+      }
+      const supportedFeatures = await getSupportedCodexFeatures(this.binary, childEnv)
+      if (this.signal.aborted) {
+        this.cleanupIsolatedHome()
+        throw abortError()
+      }
+      child = spawn(this.binary, codexActualTestAppServerArgs(supportedFeatures), {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: codexBinaryNeedsShell(this.binary),
-        env: {
-          ...process.env,
-          CODEX_HOME: isolatedHome,
-          ...(proxyUrl
-            ? {
-                HTTP_PROXY: proxyUrl,
-                HTTPS_PROXY: proxyUrl,
-                ALL_PROXY: proxyUrl,
-                http_proxy: proxyUrl,
-                https_proxy: proxyUrl,
-                all_proxy: proxyUrl
-              }
-            : {}),
-          NO_PROXY: '127.0.0.1,localhost,::1',
-          no_proxy: '127.0.0.1,localhost,::1'
-        }
+        env: childEnv
       })
     } catch (error) {
       this.cleanupIsolatedHome()

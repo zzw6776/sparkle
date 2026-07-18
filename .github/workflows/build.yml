@@ -1,0 +1,358 @@
+name: Build
+permissions: write-all
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag version to release'
+        required: false
+  push:
+    branches:
+      - master
+    tags:
+      - v*
+    paths-ignore:
+      - 'README.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/workflows/issues.yml'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            format: 7z
+          - os: windows-latest
+            arch: x64
+            format: nsis
+          - os: windows-latest
+            arch: arm64
+            format: 7z
+          - os: windows-latest
+            arch: arm64
+            format: nsis
+
+          - os: ubuntu-latest
+            arch: x64
+            format: deb
+          - os: ubuntu-latest
+            arch: x64
+            format: rpm
+          - os: ubuntu-latest
+            arch: x64
+            format: pacman
+          - os: ubuntu-latest
+            arch: arm64
+            format: deb
+          - os: ubuntu-latest
+            arch: arm64
+            format: rpm
+          - os: ubuntu-latest
+            arch: arm64
+            format: pacman
+          - os: ubuntu-latest
+            arch: loong64
+            format: deb
+          - os: ubuntu-latest
+            arch: loong64
+            format: rpm
+          - os: ubuntu-latest
+            arch: loong64
+            format: pacman
+
+          - os: macos-latest
+            arch: x64
+          - os: macos-latest
+            arch: arm64
+
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}${{ matrix.format && '-' || '' }}${{ matrix.format || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+
+      - name: Setup pnpm
+        run: npm install -g pnpm
+
+      - name: Determine and Update Version
+        shell: bash
+        run: |
+          GIT_COMMIT_HASH=$(git rev-parse --short HEAD)
+          VERSION=$(jq -r '.version' package.json)
+
+          if [ "${{ github.event.inputs.version }}" == "" ]; then
+            BASE_VERSION=$(echo $VERSION | awk -F. '{print $1"."$2"."$3+1}')
+            VERSION_PREFIX=${VERSION_PREFIX:-beta}
+            RELEASE_VERSION="${BASE_VERSION}-${VERSION_PREFIX}-${GIT_COMMIT_HASH}"
+          else
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            CLEAN_VERSION=$(echo "$INPUT_VERSION" | sed 's/^v//')
+            if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid version format: $INPUT_VERSION"
+              exit 1
+            fi
+            RELEASE_VERSION="$CLEAN_VERSION"
+          fi
+
+          jq --arg version "$RELEASE_VERSION" '.version = $version' package.json > tmp.json && mv tmp.json package.json
+
+      - name: Keep product name lowercase on Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sed -i "s/productName: Sparkle/productName: sparkle/" electron-builder.yml
+
+      - name: Install Build Tools
+        if: matrix.os == 'ubuntu-latest' && matrix.format == 'pacman'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libarchive-tools
+
+      - name: Adaptation to the loongarch64 architecture
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          npm_config_target_arch: ${{ matrix.arch }}
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'loong64'
+        shell: bash
+        run: |
+          export ELECTRON_MIRROR="https://github.com/darkyzhou/electron-loong64/releases/download/"
+          export electron_use_remote_checksums=1
+          SKIP_PREPARE=1 pnpm install electron@39.2.7 -D --ignore-scripts
+          pnpm remove electron-builder --config.ignore-scripts=true
+          SKIP_PREPARE=1 pnpm install @loongdotjs/electron-builder@26.8.2-3 -D --ignore-scripts
+
+      - name: Install Dependencies and Prepare
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          npm_config_target_arch: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          case "${{ matrix.os }}-${{ matrix.arch }}" in
+            windows-latest-x64) PNPM_TARGET_FLAGS="--os=current --os=win32 --cpu=current --cpu=x64"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-win32-x64-msvc" ;;
+            windows-latest-arm64) PNPM_TARGET_FLAGS="--os=current --os=win32 --cpu=current --cpu=arm64"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-win32-arm64-msvc" ;;
+            ubuntu-latest-x64) PNPM_TARGET_FLAGS="--os=current --os=linux --cpu=current --cpu=x64 --libc=current --libc=glibc"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-linux-x64-gnu" ;;
+            ubuntu-latest-arm64) PNPM_TARGET_FLAGS="--os=current --os=linux --cpu=current --cpu=arm64 --libc=current --libc=glibc"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-linux-arm64-gnu" ;;
+            ubuntu-latest-loong64) PNPM_TARGET_FLAGS="--os=current --os=linux --cpu=current --cpu=loong64 --libc=current --libc=glibc"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-linux-loong64-gnu" ;;
+            macos-latest-x64) PNPM_TARGET_FLAGS="--os=current --os=darwin --cpu=current --cpu=x64"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-darwin-x64" ;;
+            macos-latest-arm64) PNPM_TARGET_FLAGS="--os=current --os=darwin --cpu=current --cpu=arm64"; SPARKLE_NATIVE_PACKAGE="@uruhalushia/sparkle-native-darwin-arm64" ;;
+            *) echo "Unsupported native target: ${{ matrix.os }}-${{ matrix.arch }}" && exit 1 ;;
+          esac
+          SKIP_PREPARE=1 pnpm install $PNPM_TARGET_FLAGS
+
+          verify_native_package() {
+            node -e "require('node:module').createRequire(require.resolve(process.argv[1])).resolve(process.argv[2].trim() + '/package.json')" "$1" "$2"
+          }
+          ensure_native_package() {
+            local root_package="$1"
+            local native_package="$2"
+            if ! verify_native_package "$root_package" "$native_package"; then
+              local package_version
+              package_version=$(node -p "require('./node_modules/${root_package}/package.json').version")
+              SKIP_PREPARE=1 pnpm add "$native_package@$package_version" -D --ignore-scripts $PNPM_TARGET_FLAGS
+            fi
+          }
+          prune_native_packages() {
+            node -e "const fs=require('node:fs');const path=require('node:path');const root=process.argv[1].trim();const prefix=process.argv[2].trim();const target=process.argv[3].trim();const keep=target.split('/').pop();const base=path.dirname(path.dirname(require.resolve(root + '/package.json')));for(const name of fs.readdirSync(base)){if(name.startsWith(prefix)&&name!==keep)fs.rmSync(path.join(base,name),{recursive:true,force:true});}const store=path.join(process.cwd(),'node_modules','.pnpm');const storePrefix=root.replace('/','+')+'-';for(const name of fs.readdirSync(store)){if(name.startsWith(storePrefix)&&!name.startsWith(root.replace('/','+')+'-'+keep.slice(prefix.length)+'@'))fs.rmSync(path.join(store,name),{recursive:true,force:true});}" "$1" "$2" "$3"
+          }
+
+          ensure_native_package "@uruhalushia/sparkle-native" "$SPARKLE_NATIVE_PACKAGE"
+          prune_native_packages "@uruhalushia/sparkle-native" "sparkle-native-" "$SPARKLE_NATIVE_PACKAGE"
+          verify_native_package "@uruhalushia/sparkle-native" "$SPARKLE_NATIVE_PACKAGE" \
+            || (echo "Missing $SPARKLE_NATIVE_PACKAGE. pnpm must install cross-platform optional native dependencies." && exit 1)
+          pnpm prepare --${{ matrix.arch }}
+
+      - name: Build
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          npm_config_target_arch: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            pnpm build:win ${{ matrix.format }} --${{ matrix.arch }}
+          elif [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            if [[ "${{ matrix.arch }}" == "loong64" ]]; then
+              export ELECTRON_MIRROR="https://github.com/darkyzhou/electron-loong64/releases/download/"
+              export electron_use_remote_checksums=1
+              pnpm build:linux ${{ matrix.format }} --${{ matrix.arch }}
+            else
+              pnpm build:linux ${{ matrix.format }} --${{ matrix.arch }}
+            fi
+          else
+            pnpm build:mac --${{ matrix.arch }}
+          fi
+
+      - name: Add Portable Flag
+        if: matrix.os == 'windows-latest' && matrix.format == '7z'
+        shell: pwsh
+        run: |
+          New-Item -Path "PORTABLE" -ItemType File
+          Get-ChildItem dist/*portable.7z | ForEach-Object {
+            7z a $_.FullName PORTABLE
+          }
+
+      - name: Create Changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git log -1 --pretty=format:"%s%n%b" > changelog.md
+
+      - name: Generate latest.yml
+        shell: bash
+        run: SKIP_CHANGELOG=1 pnpm updater
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.os }}-${{ matrix.arch }}${{ matrix.format && '-' || '' }}${{ matrix.format || '' }}
+          path: |
+            dist/sparkle*
+            !dist/sparkle.app.plist
+            !dist/sparkle*blockmap*
+            latest.yml
+            changelog.md
+
+  pre-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: bin/
+          merge-multiple: true
+
+      - name: Publish private draft release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_tag="sparkle-ci-build-${GITHUB_RUN_NUMBER}"
+
+          shopt -s nullglob
+          release_files=(bin/dist/*)
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "Release packages were not downloaded." >&2
+            exit 1
+          fi
+          if [ -s bin/latest.yml ]; then
+            release_files+=(bin/latest.yml)
+          fi
+          if [ ! -s bin/changelog.md ]; then
+            echo "Release changelog was not downloaded." >&2
+            exit 1
+          fi
+
+          gh release create "$release_tag" "${release_files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Sparkle CI build #${GITHUB_RUN_NUMBER}" \
+            --notes-file bin/changelog.md \
+            --draft
+
+          # Draft assets are visible only to repository collaborators. Removing
+          # the generated tag also keeps this CI-only build out of the public tag list.
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/${release_tag}" \
+            --silent || true
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: '0'
+          fetch-tags: 'true'
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+
+      - name: Generate Changelog
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          TEXT=$(git log $(jq -r .version package.json)..HEAD --pretty=format:%s | grep -v '[0-9]\+\.[0-9]\+\.[0-9]\+$' | sed ':a;N;$!ba;s/\n/\\n/g')
+          QUESTION="Translate into Chinese:\n"""\n$TEXT\n""""
+          PAYLOAD=$(cat <<EOF
+          {
+            "stream": false,
+            "model": "gpt-5-mini",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a professional translation engine, please translate the text into a colloquial, professional, elegant and fluent content, without the style of machine translation. You must only translate the text content, never interpret it."
+              },
+              {
+                "role": "user",
+                "content": "$QUESTION"
+              }
+            ]
+          }
+          EOF
+          )
+          RESPONSE=$(curl -s -X POST "$API_URL/v1/chat/completions" \
+            -H "Authorization: Bearer $API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            --max-time 30)
+          echo '# 更新日志' > changelog.md
+          echo $RESPONSE | jq .choices[0].message.content -r | sed 's/\\n/\n/g' | sed 's/^/ - /g' >> changelog.md
+
+      - name: Update Version
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          CLEAN_VERSION=$(echo "$INPUT_VERSION" | sed 's/^v//')
+          if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format: $INPUT_VERSION"
+            exit 1
+          fi
+          jq --arg version "$CLEAN_VERSION" '.version = $version' package.json > tmp.json && mv tmp.json package.json
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add package.json
+          git commit -m "update version to $CLEAN_VERSION"
+          git push
+
+      - name: Install Dependencies and Updater
+        run: |
+          npm install -g pnpm
+          SKIP_PREPARE=1 pnpm install
+          pnpm updater
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: bin/
+          merge-multiple: true
+
+      - name: Delete Current
+        uses: 8Mi-Tech/delete-release-assets-action@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref }}
+          deleteOnlyFromDrafts: false
+
+      - name: Publish Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref }}
+          body_path: changelog.md
+          files: |
+            latest.yml
+            bin/dist/*

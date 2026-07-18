@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createWriteStream, existsSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Transform, type TransformCallback } from 'node:stream'
@@ -15,29 +15,57 @@ const CODEX_RUNTIME_VERSION = '0.144.5'
 const PROGRESS_INTERVAL = 100
 const PROBE_TIMEOUT = 10_000
 
+type CodexRuntimeTarget = 'win32-x64' | 'win32-arm64' | 'darwin-x64' | 'darwin-arm64'
+type CodexRuntimeKey = `${NodeJS.Platform}-${NodeJS.Architecture}`
+
 interface CodexRuntimeSpec {
-  target: 'win32-x64' | 'win32-arm64'
-  targetTriple: 'x86_64-pc-windows-msvc' | 'aarch64-pc-windows-msvc'
+  target: CodexRuntimeTarget
+  targetTriple:
+    | 'x86_64-pc-windows-msvc'
+    | 'aarch64-pc-windows-msvc'
+    | 'x86_64-apple-darwin'
+    | 'aarch64-apple-darwin'
+  binaryName: 'codex.exe' | 'codex'
   url: string
   integrity: string
   archiveBytes?: number
 }
 
-const CODEX_RUNTIME_SPECS: Partial<Record<NodeJS.Architecture, CodexRuntimeSpec>> = {
-  x64: {
+const CODEX_RUNTIME_SPECS: Partial<Record<CodexRuntimeKey, CodexRuntimeSpec>> = {
+  'win32-x64': {
     target: 'win32-x64',
     targetTriple: 'x86_64-pc-windows-msvc',
+    binaryName: 'codex.exe',
     url: `https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_RUNTIME_VERSION}-win32-x64.tgz`,
     integrity:
       'sha512-DnsSTlnnzleTxvLwIGnBitKInscxn2I7qASqosS8Fv+qysBygd+ZiBn/SQsRCgQ28PAlsNzmd3Gf3ZTecolAmg==',
     archiveBytes: 145_121_219
   },
-  arm64: {
+  'win32-arm64': {
     target: 'win32-arm64',
     targetTriple: 'aarch64-pc-windows-msvc',
+    binaryName: 'codex.exe',
     url: `https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_RUNTIME_VERSION}-win32-arm64.tgz`,
     integrity:
       'sha512-0Pj7iqjEOEvPQPO3kFfCy9vGX4BTu76ChFFZHr2eNNIfVc3FOENAv/X98u4L+iIUtDOK9DbqmfUudW3DPapshg=='
+  },
+  'darwin-x64': {
+    target: 'darwin-x64',
+    targetTriple: 'x86_64-apple-darwin',
+    binaryName: 'codex',
+    url: `https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_RUNTIME_VERSION}-darwin-x64.tgz`,
+    integrity:
+      'sha512-//Mo0m1MwaoT6psu5xsmofXpKx4/0irIkeq10xJvk59+886EG355ibjA+ZmlRcKhE3bLjsKD7p81nTbAdRL/bw==',
+    archiveBytes: 128_766_507
+  },
+  'darwin-arm64': {
+    target: 'darwin-arm64',
+    targetTriple: 'aarch64-apple-darwin',
+    binaryName: 'codex',
+    url: `https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_RUNTIME_VERSION}-darwin-arm64.tgz`,
+    integrity:
+      'sha512-zcT6NfBCqLFt+BReNSETTZW6v6PdbH0dzNtm9j7l7mDGqwPbKZDGJdnpkBao2389I0ZacyIKgSZoI0vez1d4Dw==',
+    archiveBytes: 120_296_947
   }
 }
 
@@ -64,7 +92,8 @@ function configuredBinary(): string | undefined {
 }
 
 function runtimeSpec(): CodexRuntimeSpec | undefined {
-  return process.platform === 'win32' ? CODEX_RUNTIME_SPECS[process.arch] : undefined
+  const key = `${process.platform}-${process.arch}` as CodexRuntimeKey
+  return CODEX_RUNTIME_SPECS[key]
 }
 
 function runtimeTargetDir(spec: CodexRuntimeSpec): string {
@@ -73,7 +102,7 @@ function runtimeTargetDir(spec: CodexRuntimeSpec): string {
 
 export function managedCodexBinaryPath(): string | undefined {
   const spec = runtimeSpec()
-  return spec ? path.join(runtimeTargetDir(spec), 'codex.exe') : undefined
+  return spec ? path.join(runtimeTargetDir(spec), spec.binaryName) : undefined
 }
 
 function baseStatus(spec?: CodexRuntimeSpec): CodexRuntimeStatus {
@@ -270,16 +299,20 @@ async function performInstall(
       'vendor',
       spec.targetTriple,
       'bin',
-      'codex.exe'
+      spec.binaryName
     )
-    if (!existsSync(extractedBinary)) throw new Error('Codex Runtime 压缩包中缺少 codex.exe')
+    if (!existsSync(extractedBinary)) {
+      throw new Error(`Codex Runtime 压缩包中缺少 ${spec.binaryName}`)
+    }
     await probeRuntime(extractedBinary)
     await logRuntime(`binary probe passed version=${CODEX_RUNTIME_VERSION} target=${spec.target}`)
     if (controller.signal.aborted) throw new Error('Codex Runtime 安装已取消')
 
     emitStatus({ ...baseStatus(spec), state: 'installing', source: 'managed' }, onProgress)
     await mkdir(stagedTargetDir, { recursive: true })
-    await rename(extractedBinary, path.join(stagedTargetDir, 'codex.exe'))
+    const stagedBinary = path.join(stagedTargetDir, spec.binaryName)
+    await rename(extractedBinary, stagedBinary)
+    if (process.platform !== 'win32') await chmod(stagedBinary, 0o755)
     const installedAt = Date.now()
     await writeFile(
       path.join(stagedTargetDir, 'runtime.json'),

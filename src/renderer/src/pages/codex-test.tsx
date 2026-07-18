@@ -1266,9 +1266,8 @@ const CodexTest: React.FC = () => {
     })
   }, [])
 
-  const changeActualTopCount = useCallback(
+  const applyActualTopSelection = useCallback(
     (value: string): void => {
-      setActualTopCount(value)
       const limit = parseTopCount(value, proxies.length)
       if (limit === undefined) return
       setActualSelected(
@@ -1278,13 +1277,25 @@ const CodexTest: React.FC = () => {
     [proxies, visibleResults]
   )
 
+  const changeActualTopCount = useCallback(
+    (value: string): void => {
+      setActualTopCount(value)
+      applyActualTopSelection(value)
+    },
+    [applyActualTopSelection]
+  )
+
   const toggleActualLogs = useCallback(() => {
     setActualLogExpanded((current) => !current)
   }, [])
 
-  const changeMode = useCallback((nextMode: TestMode): void => {
-    setMode(nextMode)
-  }, [])
+  const changeMode = useCallback(
+    (nextMode: TestMode): void => {
+      if (nextMode === 'actual') applyActualTopSelection(actualTopCount)
+      setMode(nextMode)
+    },
+    [actualTopCount, applyActualTopSelection]
+  )
 
   const changeActualModel = useCallback(
     (modelName: string): void => {

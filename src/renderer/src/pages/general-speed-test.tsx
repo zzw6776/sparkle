@@ -26,6 +26,7 @@ import {
   TestResultVirtualRows
 } from '@renderer/components/speed-test/test-result-table'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
+import { useDefaultAllSelection } from '@renderer/hooks/use-default-all-selection'
 import { useGroups } from '@renderer/hooks/use-groups'
 import {
   getDelayTestSnapshot,
@@ -286,7 +287,6 @@ const GeneralSpeedTest: React.FC = () => {
     runtimeState
   const [groupName, setGroupName] = useState(() => runtimeState.groupName || '')
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [rounds, setRounds] = useState(() => normalizeRounds(appConfig?.generalTestRounds))
   const [nodeConcurrencyInput, setNodeConcurrencyInput] = useState(() =>
     clamp(appConfig?.generalTestNodeConcurrency ?? 1, 1, 16).toString()
@@ -335,7 +335,12 @@ const GeneralSpeedTest: React.FC = () => {
     group?.all.forEach((proxy) => unique.set(proxy.name, proxy))
     return [...unique.values()]
   }, [group])
-  const proxyKey = useMemo(() => proxies.map((proxy) => proxy.name).join('\u0000'), [proxies])
+  const proxyNames = useMemo(() => proxies.map((proxy) => proxy.name), [proxies])
+  const {
+    selected,
+    setItemSelected: changeNodeSelection,
+    setAllSelected
+  } = useDefaultAllSelection(group?.name, proxyNames)
 
   useEffect(() => {
     if (!groupName && groups[0]) {
@@ -354,15 +359,8 @@ const GeneralSpeedTest: React.FC = () => {
   }, [groups, switchGroupName])
 
   useEffect(() => {
-    const nextNames = proxies.map((proxy) => proxy.name)
-    setSelected((current) => {
-      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
-        return current
-      }
-      return new Set(nextNames)
-    })
     if (group?.name) selectGeneralTestGroup(group.name)
-  }, [group?.name, proxyKey])
+  }, [group?.name])
 
   useEffect(() => {
     if (!delaySession.running && !downloadSession.running) {
@@ -568,15 +566,6 @@ const GeneralSpeedTest: React.FC = () => {
       finishGeneralDownloadTest(completed > 0)
     }
   }
-
-  const changeNodeSelection = useCallback((proxy: string, checked: boolean) => {
-    setSelected((current) => {
-      const next = new Set(current)
-      if (checked) next.add(proxy)
-      else next.delete(proxy)
-      return next
-    })
-  }, [])
 
   const switchProxy = useCallback(
     async (proxy: string): Promise<void> => {
@@ -972,9 +961,7 @@ const GeneralSpeedTest: React.FC = () => {
             indeterminate={selectedNames.length > 0 && !allSelected}
             disabled={interactionDisabled || proxies.length === 0}
             hint={`已选择 ${selectedNames.length}/${proxies.length} 个节点；表格主值为成功轮次中位数`}
-            onChange={(checked) => {
-              setSelected(checked ? new Set(proxies.map((proxy) => proxy.name)) : new Set())
-            }}
+            onChange={setAllSelected}
           />
 
           <TestResultTableViewport minWidthClassName="min-w-190">

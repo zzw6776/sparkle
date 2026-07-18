@@ -9,7 +9,7 @@ import {
 } from '@heroui/react'
 import BasePage from '@renderer/components/base/base-page'
 import { formatTestHistoryTime } from '@renderer/utils/test-history'
-import { useRef, type ComponentProps, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { IoIosArrowBack } from 'react-icons/io'
 import { MdStop } from 'react-icons/md'
 
@@ -244,10 +244,15 @@ export function TestNumberAutocomplete({
   onValidBlur
 }: TestNumberAutocompleteProps): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const parsed = parseTestInteger(value, min, max)
   const invalid = !disabled && (invalidOverride ?? parsed === undefined)
   const invalidMessage =
     validationMessage || (value === '' ? emptyPlaceholder : `请输入 ${min}-${max} 的整数`)
+
+  useEffect(() => {
+    if (selectedKey !== null && selectedKey !== value) setSelectedKey(null)
+  }, [selectedKey, value])
 
   return (
     <Tooltip content={invalidMessage} placement="top" closeDelay={0} isDisabled={!invalid}>
@@ -273,13 +278,18 @@ export function TestNumberAutocomplete({
           allowsCustomValue
           isClearable={false}
           inputValue={value}
-          selectedKey={null}
+          selectedKey={selectedKey}
           isDisabled={disabled}
-          onInputChange={onValueChange}
+          onInputChange={(nextValue) => {
+            setSelectedKey(null)
+            onValueChange(nextValue)
+          }}
           onSelectionChange={(key) => {
             if (key === null) return
-            onValueChange(String(key))
-            inputRef.current?.blur()
+            const nextValue = String(key)
+            setSelectedKey(nextValue)
+            onValueChange(nextValue)
+            window.requestAnimationFrame(() => inputRef.current?.blur())
           }}
           onBlur={() => {
             if (parsed !== undefined) onValidBlur?.(parsed)

@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import net from 'node:net'
 import { performance } from 'node:perf_hooks'
 import tls from 'node:tls'
@@ -7,11 +6,12 @@ import {
   getRuntimeCodexTestChannels,
   MAX_CODEX_TEST_CONCURRENCY
 } from './factory'
-import { mihomoChangeProxy } from './mihomoApi'
+import { mihomoChangeProxy, mihomoCloseConnections } from './mihomoApi'
 import { acquireNetworkTestChannel } from './networkTestChannel'
 
 const TARGET_HOST = 'chatgpt.com'
 const TARGET_PORT = 443
+const CODEX_BACKEND_PATH = '/backend-api/'
 const REQUEST_TIMEOUT = 10_000
 const MAX_HEADER_BYTES = 32 * 1024
 
@@ -46,8 +46,7 @@ interface ProbeResult {
 interface SuccessfulSample {
   proxy: string
   round: number
-  https: ProbeResult
-  websocket: ProbeResult
+  backend: ProbeResult
 }
 
 interface FailedSample {
@@ -254,7 +253,10 @@ function requestHeaders(
       settled = true
       cleanup()
       socket.destroy()
-      resolve({ duration: (firstByteAt ?? performance.now()) - startedAt, status })
+      resolve({
+        duration: (firstByteAt ?? performance.now()) - startedAt,
+        status
+      })
     }
     const onError = (error: Error): void => fail(error)
     const onTimeout = (): void => fail(new Error('等待 chatgpt.com 响应超时'))
@@ -284,24 +286,13 @@ async function runProbe(port: number, signal: AbortSignal, request: string): Pro
   }
 }
 
-function httpsRequest(): string {
+function backendRequest(): string {
   return (
-    `GET / HTTP/1.1\r\nHost: ${TARGET_HOST}\r\n` +
-    'User-Agent: Sparkle-Codex-Test/1.0\r\n' +
-    'Accept: text/html,application/xhtml+xml\r\n' +
+    `GET ${CODEX_BACKEND_PATH} HTTP/1.1\r\nHost: ${TARGET_HOST}\r\n` +
+    'User-Agent: Sparkle-Link-Test/1.0\r\n' +
+    'Accept: */*\r\n' +
     'Accept-Encoding: identity\r\n' +
     'Cache-Control: no-cache\r\nConnection: close\r\n\r\n'
-  )
-}
-
-function websocketRequest(): string {
-  return (
-    `GET / HTTP/1.1\r\nHost: ${TARGET_HOST}\r\n` +
-    'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
-    `Sec-WebSocket-Key: ${randomBytes(16).toString('base64')}\r\n` +
-    'Sec-WebSocket-Version: 13\r\n' +
-    `Origin: https://${TARGET_HOST}\r\n` +
-    'User-Agent: Sparkle-Codex-Test/1.0\r\n\r\n'
   )
 }
 
@@ -313,27 +304,21 @@ function aggregateResult(
 ): CodexTestResult {
   const completedRounds = successful.length + failed.length
   const successRate = completedRounds > 0 ? successful.length / completedRounds : 0
-  const httpsTotals = successful.map((sample) => sample.https.totalMs)
-  const websocketTotals = successful.map((sample) => sample.websocket.totalMs)
-  const combinedTotals = successful.map(
-    (sample) => sample.https.totalMs * 0.45 + sample.websocket.totalMs * 0.55
-  )
+  const backendTotals = successful.map((sample) => sample.backend.totalMs)
   const score =
     successful.length > 0
-      ? median(combinedTotals) + standardDeviation(combinedTotals) + (1 - successRate) * 2000
+      ? median(backendTotals) + standardDeviation(backendTotals) + (1 - successRate) * 2000
       : undefined
   const last = successful.at(-1)
   const roundResults: CodexTestRoundResult[] = [
     ...successful.map((sample) => ({
       round: sample.round,
       success: true,
-      combinedMs: roundMetric(sample.https.totalMs * 0.45 + sample.websocket.totalMs * 0.55),
-      tunnelMs: roundMetric(sample.https.tunnelMs),
-      tlsMs: roundMetric(sample.https.tlsMs),
-      httpsTtfbMs: roundMetric(sample.https.responseMs),
-      websocketMs: roundMetric(sample.websocket.responseMs),
-      httpsStatus: sample.https.status,
-      websocketStatus: sample.websocket.status
+      combinedMs: roundMetric(sample.backend.totalMs),
+      tunnelMs: roundMetric(sample.backend.tunnelMs),
+      tlsMs: roundMetric(sample.backend.tlsMs),
+      httpsTtfbMs: roundMetric(sample.backend.responseMs),
+      httpsStatus: sample.backend.status
     })),
     ...failed.map((sample) => ({
       round: sample.round,
@@ -350,24 +335,18 @@ function aggregateResult(
     failed: failed.length,
     successRate,
     tunnelMs: successful.length
-      ? roundMetric(median(successful.map((sample) => sample.https.tunnelMs)))
+      ? roundMetric(median(successful.map((sample) => sample.backend.tunnelMs)))
       : undefined,
     tlsMs: successful.length
-      ? roundMetric(median(successful.map((sample) => sample.https.tlsMs)))
+      ? roundMetric(median(successful.map((sample) => sample.backend.tlsMs)))
       : undefined,
     httpsTtfbMs: successful.length
-      ? roundMetric(median(successful.map((sample) => sample.https.responseMs)))
+      ? roundMetric(median(successful.map((sample) => sample.backend.responseMs)))
       : undefined,
-    websocketMs: successful.length
-      ? roundMetric(median(successful.map((sample) => sample.websocket.responseMs)))
-      : undefined,
-    totalMs: successful.length
-      ? roundMetric(median(httpsTotals) * 0.45 + median(websocketTotals) * 0.55)
-      : undefined,
-    jitterMs: successful.length ? roundMetric(standardDeviation(combinedTotals)) : undefined,
+    totalMs: successful.length ? roundMetric(median(backendTotals)) : undefined,
+    jitterMs: successful.length ? roundMetric(standardDeviation(backendTotals)) : undefined,
     score: score === undefined ? undefined : roundMetric(score),
-    httpsStatus: last?.https.status,
-    websocketStatus: last?.websocket.status,
+    httpsStatus: last?.backend.status,
     error: failed.at(-1)?.error,
     roundResults,
     testedAt: Date.now()
@@ -430,6 +409,7 @@ export async function mihomoCodexTest(
 
       try {
         await mihomoChangeProxy(channel.group, proxy)
+        await mihomoCloseConnections(channel.group)
         onProgress?.({
           proxy,
           round,
@@ -438,18 +418,12 @@ export async function mihomoCodexTest(
           completed,
           total
         })
-        const [httpsResult, websocketResult] = await Promise.allSettled([
-          runProbe(channel.port, current.controller.signal, httpsRequest()),
-          runProbe(channel.port, current.controller.signal, websocketRequest())
-        ])
-        if (httpsResult.status === 'rejected') throw httpsResult.reason
-        if (websocketResult.status === 'rejected') throw websocketResult.reason
+        const backend = await runProbe(channel.port, current.controller.signal, backendRequest())
 
         const sample: SuccessfulSample = {
           proxy,
           round,
-          https: httpsResult.value,
-          websocket: websocketResult.value
+          backend
         }
         successful.set(proxy, [...(successful.get(proxy) || []), sample])
       } catch (error) {

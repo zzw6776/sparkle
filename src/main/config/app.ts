@@ -65,8 +65,10 @@ export async function patchAppConfig(patch: Partial<AppConfig>): Promise<AppConf
   const previousPromise = writePromise
   const currentPromise = (async () => {
     await previousPromise
-    appConfig = deepMerge(appConfig, patch)
-    await safeWriteConfig(stringifyYaml(appConfig))
+    const currentConfig = appConfig || (await getAppConfig())
+    const nextConfig = deepMerge(structuredClone(currentConfig), structuredClone(patch))
+    await safeWriteConfig(stringifyYaml(nextConfig))
+    appConfig = nextConfig
   })()
   writePromise = currentPromise.catch(() => {})
   await currentPromise

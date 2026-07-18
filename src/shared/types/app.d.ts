@@ -76,9 +76,7 @@ interface CodexTestRoundResult {
   tunnelMs?: number
   tlsMs?: number
   httpsTtfbMs?: number
-  websocketMs?: number
   httpsStatus?: number
-  websocketStatus?: number
   error?: string
 }
 
@@ -92,12 +90,10 @@ interface CodexTestResult {
   tunnelMs?: number
   tlsMs?: number
   httpsTtfbMs?: number
-  websocketMs?: number
   totalMs?: number
   jitterMs?: number
   score?: number
   httpsStatus?: number
-  websocketStatus?: number
   error?: string
   roundResults: CodexTestRoundResult[]
   testedAt: number

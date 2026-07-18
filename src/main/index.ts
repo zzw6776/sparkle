@@ -59,11 +59,11 @@ async function scheduleLightweightMode(): Promise<void> {
     if (autoLightweightMode === 'core') {
       await quitWithoutCore()
     } else if (autoLightweightMode === 'tray') {
-      if (mainWindow && !mainWindow.isVisible()) {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
         mainWindow.destroy()
-        if (process.platform === 'darwin' && app.dock) {
-          app.dock.hide()
-        }
+      }
+      if (process.platform === 'darwin' && app.dock) {
+        app.dock.hide()
       }
     }
   }
@@ -346,7 +346,9 @@ export async function showMainWindow(): Promise<void> {
   }
   if (process.platform === 'darwin' && app.dock) {
     const { useDockIcon = true } = await getAppConfig()
-    if (!useDockIcon) {
+    if (useDockIcon) {
+      await app.dock.show()
+    } else {
       app.dock.hide()
     }
   }

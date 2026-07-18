@@ -230,30 +230,40 @@ jobs:
           path: bin/
           merge-multiple: true
 
-      - name: Delete current release assets
-        uses: 8Mi-Tech/delete-release-assets-action@main
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: pre-release
-          deleteOnlyFromDrafts: false
-
-      - name: Tag Repo
-        uses: richardsimko/update-tag@v1
-        with:
-          tag_name: pre-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish Prerelease
+      - name: Publish private draft release
         if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: pre-release
-          body_path: bin/changelog.md
-          files: |
-            bin/latest.yml
-            bin/dist/*
-          prerelease: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_tag="sparkle-ci-build-${GITHUB_RUN_NUMBER}"
+
+          shopt -s nullglob
+          release_files=(bin/dist/*)
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "Release packages were not downloaded." >&2
+            exit 1
+          fi
+          if [ -s bin/latest.yml ]; then
+            release_files+=(bin/latest.yml)
+          fi
+          if [ ! -s bin/changelog.md ]; then
+            echo "Release changelog was not downloaded." >&2
+            exit 1
+          fi
+
+          gh release create "$release_tag" "${release_files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Sparkle CI build #${GITHUB_RUN_NUMBER}" \
+            --notes-file bin/changelog.md \
+            --draft
+
+          # Draft assets are visible only to repository collaborators. Removing
+          # the generated tag also keeps this CI-only build out of the public tag list.
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/${release_tag}" \
+            --silent || true
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')

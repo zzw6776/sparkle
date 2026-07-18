@@ -26,6 +26,7 @@ import {
   TestResultVirtualRows
 } from '@renderer/components/speed-test/test-result-table'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
+import { useDefaultAllSelection } from '@renderer/hooks/use-default-all-selection'
 import { useGroups } from '@renderer/hooks/use-groups'
 import {
   getCodexTestSnapshot,
@@ -53,10 +54,9 @@ import { MdCheckCircle, MdContentCopy, MdErrorOutline } from 'react-icons/md'
 import { Virtuoso } from 'react-virtuoso'
 import { useNavigate } from 'react-router-dom'
 
-type SortKey =
-  'name' | 'score' | 'tunnelMs' | 'tlsMs' | 'httpsTtfbMs' | 'websocketMs' | 'successRate' | 'grade'
+type SortKey = 'name' | 'score' | 'tunnelMs' | 'tlsMs' | 'httpsTtfbMs' | 'successRate' | 'grade'
 type SortDirection = 'asc' | 'desc'
-type RoundMetricKey = 'combinedMs' | 'tunnelMs' | 'tlsMs' | 'httpsTtfbMs' | 'websocketMs'
+type RoundMetricKey = 'combinedMs' | 'tunnelMs' | 'tlsMs' | 'httpsTtfbMs'
 type TestMode = 'link' | 'actual'
 type ActualSortKey =
   | 'name'
@@ -71,7 +71,7 @@ type ActualSortKey =
 
 const stageText: Record<CodexTestStage, string> = {
   selecting: '正在切换测试节点',
-  probing: '正在并行测试 HTTPS 和 WebSocket',
+  probing: '正在测试后端可达性',
   completed: '本轮测试完成'
 }
 
@@ -87,7 +87,7 @@ const MIN_CONCURRENCY = 1
 const MAX_CONCURRENCY = 16
 const DEFAULT_CODEX_OPTION = '__CODEX_DEFAULT__'
 const ACTUAL_TABLE_COLUMNS = 'grid-cols-[minmax(180px,1.7fr)_repeat(7,minmax(86px,1fr))_82px_72px]'
-const LINK_TABLE_COLUMNS = 'grid-cols-[minmax(160px,1.7fr)_repeat(6,minmax(74px,1fr))_82px_72px]'
+const LINK_TABLE_COLUMNS = 'grid-cols-[minmax(160px,1.7fr)_repeat(5,minmax(74px,1fr))_82px_72px]'
 const EMPTY_LINK_RESULTS: Record<string, CodexTestResult> = {}
 const EMPTY_ACTUAL_RESULTS: Record<string, CodexActualTestResult> = {}
 
@@ -147,15 +147,11 @@ const roundMetricLabels: Record<RoundMetricKey, string> = {
   combinedMs: '综合耗时',
   tunnelMs: 'CONNECT',
   tlsMs: 'TLS',
-  httpsTtfbMs: 'HTTPS',
-  websocketMs: 'WebSocket'
+  httpsTtfbMs: '后端响应'
 }
 
 function roundMetricStatus(round: CodexTestRoundResult, key: RoundMetricKey): string {
   if (key === 'httpsTtfbMs' && round.httpsStatus) return ` · HTTP ${round.httpsStatus}`
-  if (key === 'websocketMs' && round.websocketStatus) {
-    return ` · HTTP ${round.websocketStatus}`
-  }
   return ''
 }
 
@@ -387,7 +383,6 @@ const CodexLinkRow = memo<CodexLinkRowProps>(
         {metricResult(result, result?.tunnelMs, 'tunnelMs')}
         {metricResult(result, result?.tlsMs, 'tlsMs')}
         {metricResult(result, result?.httpsTtfbMs, 'httpsTtfbMs')}
-        {metricResult(result, result?.websocketMs, 'websocketMs')}
         {result ? (
           <TestResultTooltip
             placement="top"
@@ -730,7 +725,6 @@ const CodexTest: React.FC = () => {
   )
   const [groupName, setGroupName] = useState(() => state.groupName || actualState.groupName || '')
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [actualSelected, setActualSelected] = useState<Set<string>>(new Set())
   const [rounds, setRounds] = useState(3)
   const [actualRounds, setActualRounds] = useState(1)
@@ -771,6 +765,12 @@ const CodexTest: React.FC = () => {
     group?.all.filter(isTestableProxy).forEach((proxy) => unique.set(proxy.name, proxy))
     return [...unique.values()]
   }, [group])
+  const proxyNames = useMemo(() => proxies.map((proxy) => proxy.name), [proxies])
+  const {
+    selected,
+    setItemSelected: changeLinkSelection,
+    setAllSelected: setAllLinkSelected
+  } = useDefaultAllSelection(group?.name, proxyNames)
   const proxyKey = useMemo(() => proxies.map((proxy) => proxy.name).join('\u0000'), [proxies])
   const visibleResults =
     state.groupName && group?.name !== state.groupName ? EMPTY_LINK_RESULTS : state.results
@@ -895,16 +895,6 @@ const CodexTest: React.FC = () => {
       setSwitchGroupName(FOLLOW_TEST_GROUP)
     }
   }, [groups, switchGroupName])
-
-  useEffect(() => {
-    const nextNames = proxies.map((proxy) => proxy.name)
-    setSelected((current) => {
-      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
-        return current
-      }
-      return new Set(nextNames)
-    })
-  }, [group?.name, proxyKey])
 
   useEffect(() => {
     if (actualTopLimit === undefined || actualState.testing) return
@@ -1087,17 +1077,6 @@ const CodexTest: React.FC = () => {
       notify(`复制测试日志失败：${String(error)}`, { variant: 'danger' })
     }
   }, [actualState.logs])
-
-  const changeLinkSelection = useCallback((proxyName: string, checked: boolean): void => {
-    setSelected((current) => {
-      const hasProxy = current.has(proxyName)
-      if (hasProxy === checked) return current
-      const next = new Set(current)
-      if (checked) next.add(proxyName)
-      else next.delete(proxyName)
-      return next
-    })
-  }, [])
 
   const changeActualSelection = useCallback((proxyName: string, checked: boolean): void => {
     setActualSelected((current) => {
@@ -1343,8 +1322,9 @@ const CodexTest: React.FC = () => {
 
         {mode === 'link' ? (
           <div className="rounded-xl border border-divider/60 bg-content1 px-3 py-2 text-xs leading-5 text-foreground-500">
-            目标：chatgpt.com:443 · 流程：代理 CONNECT → TLS → HTTPS → WebSocket Upgrade。
-            不发送提示词，不调用模型；收到服务响应即可用于比较链路速度。
+            目标：chatgpt.com:443 · 流程：代理 CONNECT → TLS → 未登录后端请求。 不读取或发送 Codex
+            登录信息，不发送提示词，不调用模型，不消耗 Token；HTTP 403
+            表示未登录但后端可达，可正常用于比较链路速度。
           </div>
         ) : (
           <div className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-foreground-600">
@@ -1403,9 +1383,11 @@ const CodexTest: React.FC = () => {
                 : '结果按 Codex 综合表现排序'
             }
             onChange={(checked) => {
-              const next = checked ? new Set(proxies.map((proxy) => proxy.name)) : new Set<string>()
-              if (mode === 'actual') setActualSelected(next)
-              else setSelected(next)
+              if (mode === 'actual') {
+                setActualSelected(checked ? new Set(proxyNames) : new Set<string>())
+              } else {
+                setAllLinkSelected(checked)
+              }
             }}
           />
 
@@ -1431,8 +1413,7 @@ const CodexTest: React.FC = () => {
                 {sortHeader('score', '综合耗时')}
                 {sortHeader('tunnelMs', 'CONNECT')}
                 {sortHeader('tlsMs', 'TLS')}
-                {sortHeader('httpsTtfbMs', 'HTTPS')}
-                {sortHeader('websocketMs', 'WebSocket')}
+                {sortHeader('httpsTtfbMs', '后端响应')}
                 {sortHeader('successRate', '成功率')}
                 {sortHeader('grade', '评级')}
                 <TestResultActionHeader />

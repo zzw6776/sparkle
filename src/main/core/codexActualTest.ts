@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { rmSync } from 'node:fs'
+import { chmod, copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -14,6 +15,8 @@ const REQUEST_TIMEOUT = 60_000
 const RPC_TIMEOUT = 30_000
 const MAX_ACTUAL_CONCURRENCY = 4
 const ROUTE_CHECK_INTERVAL = 100
+const ISOLATED_CODEX_HOME_PREFIX = 'sparkle-codex-home-'
+const CURRENT_ISOLATED_CODEX_HOME_PREFIX = `${ISOLATED_CODEX_HOME_PREFIX}${process.pid}-`
 const CODEX_ACTUAL_TEST_DISABLED_FEATURES = [
   'apps',
   'auth_elicitation',
@@ -92,6 +95,9 @@ let activeCodexActualTest: ActiveCodexActualTest | undefined
 let resolvedCodexBinary: string | undefined
 let cachedModelList:
   { binary: string; expiresAt: number; models: CodexActualTestModelOption[] } | undefined
+let modelListRequest: { binary: string; promise: Promise<CodexActualTestModelOption[]> } | undefined
+let staleIsolatedHomeCleanup: Promise<void> | undefined
+const isolatedCodexHomes = new Set<string>()
 
 interface CodexProbeResult {
   available: boolean
@@ -109,6 +115,50 @@ function errorMessage(error: unknown): string {
 function abortError(): Error {
   return new Error('Codex 真实响应测试已停止')
 }
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+async function cleanupStaleIsolatedCodexHomes(): Promise<void> {
+  const tempDirectory = tmpdir()
+  const entries = await readdir(tempDirectory, { withFileTypes: true })
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(ISOLATED_CODEX_HOME_PREFIX))
+      .map(async (entry) => {
+        const directory = path.join(tempDirectory, entry.name)
+        const pidMatch = entry.name.match(/^sparkle-codex-home-(\d+)-/)
+        // Older builds did not encode ownership in the directory name. Leave
+        // those directories alone because another installed Sparkle instance
+        // may still be using one; all directories created here carry a PID.
+        if (!pidMatch) return
+        const ownerPid = Number(pidMatch[1])
+        if (ownerPid === process.pid || processIsRunning(ownerPid)) return
+        await rm(directory, { recursive: true, force: true }).catch(() => {})
+      })
+  )
+}
+
+function ensureStaleIsolatedHomeCleanup(): Promise<void> {
+  staleIsolatedHomeCleanup ??= cleanupStaleIsolatedCodexHomes().catch(() => {})
+  return staleIsolatedHomeCleanup
+}
+
+process.once('exit', () => {
+  isolatedCodexHomes.forEach((directory) => {
+    try {
+      rmSync(directory, { recursive: true, force: true })
+    } catch {
+      // A later startup also removes directories whose owner process no longer exists.
+    }
+  })
+})
 
 function terminateChildProcess(child: ChildProcess, force = false): void {
   if (child.exitCode !== null || child.signalCode !== null) return
@@ -334,22 +384,30 @@ function codexActualTestAppServerArgs(): string[] {
 }
 
 async function createIsolatedCodexHome(): Promise<string> {
-  const isolatedHome = await mkdtemp(path.join(tmpdir(), 'sparkle-codex-home-'))
+  await ensureStaleIsolatedHomeCleanup()
+  const isolatedHome = await mkdtemp(path.join(tmpdir(), CURRENT_ISOLATED_CODEX_HOME_PREFIX))
+  isolatedCodexHomes.add(isolatedHome)
   const sourceHome = process.env.CODEX_HOME?.trim() || path.join(homedir(), '.codex')
   try {
-    await copyFile(path.join(sourceHome, 'auth.json'), path.join(isolatedHome, 'auth.json'))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      await rm(isolatedHome, { recursive: true, force: true }).catch(() => {})
-      throw error
+    await chmod(isolatedHome, 0o700)
+    const authPath = path.join(isolatedHome, 'auth.json')
+    try {
+      await copyFile(path.join(sourceHome, 'auth.json'), authPath)
+      await chmod(authPath, 0o600)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
+    await writeFile(
+      path.join(isolatedHome, 'config.toml'),
+      'project_doc_max_bytes = 0\nweb_search = "disabled"\n\n[tools]\nview_image = false\n',
+      { mode: 0o600 }
+    )
+    return isolatedHome
+  } catch (error) {
+    isolatedCodexHomes.delete(isolatedHome)
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => {})
+    throw error
   }
-  await writeFile(
-    path.join(isolatedHome, 'config.toml'),
-    'project_doc_max_bytes = 0\nweb_search = "disabled"\n\n[tools]\nview_image = false\n',
-    { mode: 0o600 }
-  )
-  return isolatedHome
 }
 
 class CodexAppServerClient {
@@ -365,14 +423,13 @@ class CodexAppServerClient {
 
   constructor(
     private readonly binary: string,
-    private readonly proxyPort: number,
-    private readonly signal: AbortSignal
+    private readonly signal: AbortSignal,
+    private readonly proxyPort?: number
   ) {}
 
   async start(): Promise<void> {
     if (this.child) return
     if (this.signal.aborted) throw abortError()
-    const proxyUrl = `http://127.0.0.1:${this.proxyPort}`
     const isolatedHome = await createIsolatedCodexHome()
     this.isolatedHome = isolatedHome
     if (this.signal.aborted) {
@@ -381,18 +438,23 @@ class CodexAppServerClient {
     }
     let child: ChildProcessWithoutNullStreams
     try {
+      const proxyUrl = this.proxyPort ? `http://127.0.0.1:${this.proxyPort}` : undefined
       child = spawn(this.binary, codexActualTestAppServerArgs(), {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: codexBinaryNeedsShell(this.binary),
         env: {
           ...process.env,
           CODEX_HOME: isolatedHome,
-          HTTP_PROXY: proxyUrl,
-          HTTPS_PROXY: proxyUrl,
-          ALL_PROXY: proxyUrl,
-          http_proxy: proxyUrl,
-          https_proxy: proxyUrl,
-          all_proxy: proxyUrl,
+          ...(proxyUrl
+            ? {
+                HTTP_PROXY: proxyUrl,
+                HTTPS_PROXY: proxyUrl,
+                ALL_PROXY: proxyUrl,
+                http_proxy: proxyUrl,
+                https_proxy: proxyUrl,
+                all_proxy: proxyUrl
+              }
+            : {}),
           NO_PROXY: '127.0.0.1,localhost,::1',
           no_proxy: '127.0.0.1,localhost,::1'
         }
@@ -483,6 +545,7 @@ class CodexAppServerClient {
     const isolatedHome = this.isolatedHome
     if (!isolatedHome) return
     this.isolatedHome = undefined
+    isolatedCodexHomes.delete(isolatedHome)
     void rm(isolatedHome, { recursive: true, force: true }).catch(() => {})
   }
 
@@ -813,20 +876,11 @@ export function cancelMihomoCodexActualTest(): boolean {
   return true
 }
 
-export async function listCodexActualTestModels(): Promise<CodexActualTestModelOption[]> {
-  const binary = await resolveCodexBinary()
-  if (cachedModelList?.binary === binary && cachedModelList.expiresAt > Date.now()) {
-    return cachedModelList.models
-  }
-  if (activeCodexActualTest) {
-    if (cachedModelList?.binary === binary) return cachedModelList.models
-    throw new Error('真实响应测试进行中，暂时无法读取模型列表')
-  }
-
-  const channel = getRuntimeCodexTestChannels()[0]
-  if (!channel) throw new Error('Codex 测试通道不可用，请重启内核后重试')
+async function loadCodexActualTestModels(binary: string): Promise<CodexActualTestModelOption[]> {
   const controller = new AbortController()
-  const client = new CodexAppServerClient(binary, channel.port, controller.signal)
+  // model/list is local app-server metadata. It must not occupy a hidden test
+  // listener or race with a real network test that is switching that listener.
+  const client = new CodexAppServerClient(binary, controller.signal)
   try {
     await client.start()
     const models: CodexActualTestModelOption[] = []
@@ -863,6 +917,22 @@ export async function listCodexActualTestModels(): Promise<CodexActualTestModelO
   } finally {
     client.stop()
     controller.abort()
+  }
+}
+
+export async function listCodexActualTestModels(): Promise<CodexActualTestModelOption[]> {
+  const binary = await resolveCodexBinary()
+  if (cachedModelList?.binary === binary && cachedModelList.expiresAt > Date.now()) {
+    return cachedModelList.models
+  }
+  if (modelListRequest?.binary === binary) return modelListRequest.promise
+
+  const promise = loadCodexActualTestModels(binary)
+  modelListRequest = { binary, promise }
+  try {
+    return await promise
+  } finally {
+    if (modelListRequest?.promise === promise) modelListRequest = undefined
   }
 }
 
@@ -906,7 +976,7 @@ export async function mihomoCodexActualTest(
   const getClient = (channel: TestChannel): CodexAppServerClient => {
     const existing = clients.get(channel.port)
     if (existing) return existing
-    const client = new CodexAppServerClient(binary, channel.port, current.controller.signal)
+    const client = new CodexAppServerClient(binary, current.controller.signal, channel.port)
     clients.set(channel.port, client)
     current.clients.add(client)
     return client

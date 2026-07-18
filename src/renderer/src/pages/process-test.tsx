@@ -26,6 +26,7 @@ import {
   TestResultVirtualRows
 } from '@renderer/components/speed-test/test-result-table'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
+import { useDefaultAllSelection } from '@renderer/hooks/use-default-all-selection'
 import { useGroups } from '@renderer/hooks/use-groups'
 import {
   getProcessTestSnapshot,
@@ -286,27 +287,26 @@ const ProcessTest: React.FC = () => {
   const [catalogs, setCatalogs] = useState(() => getProcessTestCatalog())
   const [requestedProcessKey] = useState(() => takeSelectedProcessTestProcess())
   const [savedProcessKeys] = useState(() => readTestHistory<string[]>(PROCESS_TEST_SELECTION_KEY))
-  const initialProcessKeys = requestedProcessKey
+  const preferredProcessKeys = requestedProcessKey
     ? [requestedProcessKey]
     : savedProcessKeys !== undefined
       ? savedProcessKeys
       : state.processKeys || (catalogs[0] ? [catalogs[0].key] : [])
-  const preferredProcessKeysRef = useRef(initialProcessKeys)
-  const selectionTouchedRef = useRef(savedProcessKeys !== undefined)
+  const preferredProcessKeysRef = useRef(preferredProcessKeys)
+  const selectionTouchedRef = useRef(
+    !requestedProcessKey && savedProcessKeys !== undefined && savedProcessKeys.length === 0
+  )
   const testingRef = useRef(state.testing)
   testingRef.current = state.testing
   const [selectedProcessKeys, setSelectedProcessKeys] = useState<Set<string>>(() => {
-    return new Set(initialProcessKeys)
+    return new Set(preferredProcessKeys)
   })
   const [processSearch, setProcessSearch] = useState('')
+  const [processPickerSelection, setProcessPickerSelection] = useState<string | null>(null)
   const processPickerRef = useRef<HTMLInputElement>(null)
   const [groupName, setGroupName] = useState(() => groups[0]?.name || '')
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
   const [switchingProxy, setSwitchingProxy] = useState<string>()
-  const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set())
-  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(
-    () => new Set(groups[0]?.all.filter(isTestableProxy).map((proxy) => proxy.name) || [])
-  )
   const [rounds, setRounds] = useState(3)
   const [concurrencyInput, setConcurrencyInput] = useState(() =>
     normalizeConcurrency(
@@ -341,10 +341,15 @@ const ProcessTest: React.FC = () => {
     () => processSelectionKey(selectedProcessKeys),
     [selectedProcessKeys]
   )
-  const combinedDomainSelectionKey = useMemo(
-    () => combinedDomains.map((domain) => domain.key).join('\u0000'),
+  const combinedDomainKeys = useMemo(
+    () => combinedDomains.map((domain) => domain.key),
     [combinedDomains]
   )
+  const {
+    selected: selectedDomains,
+    setItemSelected: setDomainSelected,
+    setAllSelected: setAllDomainsSelected
+  } = useDefaultAllSelection(selectedProcessSelectionKey, combinedDomainKeys)
   const testingProcessSelectionKey = useMemo(
     () => processSelectionKey(state.processKeys || []),
     [state.processKeys]
@@ -367,7 +372,12 @@ const ProcessTest: React.FC = () => {
     group?.all.filter(isTestableProxy).forEach((proxy) => unique.set(proxy.name, proxy))
     return [...unique.values()]
   }, [group])
-  const proxyKey = useMemo(() => proxies.map((proxy) => proxy.name).join('\u0000'), [proxies])
+  const proxyNames = useMemo(() => proxies.map((proxy) => proxy.name), [proxies])
+  const {
+    selected: selectedNodes,
+    setItemSelected: changeNodeSelection,
+    setAllSelected: setAllNodesSelected
+  } = useDefaultAllSelection(group?.name, proxyNames)
   const visibleResults =
     testingProcessSelectionKey && selectedProcessSelectionKey !== testingProcessSelectionKey
       ? EMPTY_PROCESS_RESULTS
@@ -388,30 +398,23 @@ const ProcessTest: React.FC = () => {
   }, [groups, switchGroupName])
 
   useEffect(() => {
-    if (selectionTouchedRef.current || selectedProcessKeys.size > 0 || catalogs.length === 0) {
-      return
-    }
-    const restoredKeys = preferredProcessKeysRef.current.filter((key) =>
-      catalogs.some((catalog) => catalog.key === key)
-    )
-    const nextKeys = restoredKeys.length > 0 ? restoredKeys : catalogs[0] ? [catalogs[0].key] : []
+    if (catalogs.length === 0) return
+    const catalogKeys = new Set(catalogs.map((catalog) => catalog.key))
     setSelectedProcessKeys((current) => {
+      const currentKeys = [...current].filter((key) => catalogKeys.has(key))
+      const preferredKeys = preferredProcessKeysRef.current.filter((key) => catalogKeys.has(key))
+      const nextKeys =
+        currentKeys.length > 0 || selectionTouchedRef.current
+          ? currentKeys
+          : preferredKeys.length > 0
+            ? preferredKeys
+            : [catalogs[0].key]
       if (current.size === nextKeys.length && nextKeys.every((key) => current.has(key))) {
         return current
       }
       return new Set(nextKeys)
     })
-  }, [catalogs, selectedProcessKeys.size])
-
-  useEffect(() => {
-    const nextDomains = combinedDomainSelectionKey ? combinedDomainSelectionKey.split('\u0000') : []
-    setSelectedDomains((current) => {
-      if (current.size === nextDomains.length && nextDomains.every((key) => current.has(key))) {
-        return current
-      }
-      return new Set(nextDomains)
-    })
-  }, [combinedDomainSelectionKey, selectedProcessSelectionKey])
+  }, [catalogs])
 
   useEffect(() => {
     writeTestHistory(PROCESS_TEST_SELECTION_KEY, [...selectedProcessKeys])
@@ -432,16 +435,6 @@ const ProcessTest: React.FC = () => {
   }, [])
 
   useEffect(() => releaseProcessTestTargetMemory, [])
-
-  useEffect(() => {
-    const nextNames = proxies.map((proxy) => proxy.name)
-    setSelectedNodes((current) => {
-      if (current.size === nextNames.length && nextNames.every((name) => current.has(name))) {
-        return current
-      }
-      return new Set(nextNames)
-    })
-  }, [group?.name, proxyKey])
 
   useEffect(() => {
     if (!state.testing) {
@@ -496,15 +489,6 @@ const ProcessTest: React.FC = () => {
     setSortKey(key)
     setSortDirection(key === 'successRate' ? 'desc' : 'asc')
   }
-
-  const changeNodeSelection = useCallback((proxy: string, checked: boolean) => {
-    setSelectedNodes((current) => {
-      const next = new Set(current)
-      if (checked) next.add(proxy)
-      else next.delete(proxy)
-      return next
-    })
-  }, [])
 
   const switchProxy = useCallback(
     async (proxy: string): Promise<void> => {
@@ -582,12 +566,19 @@ const ProcessTest: React.FC = () => {
             placeholder="搜索进程名称、路径或来源 IP"
             allowsCustomValue
             inputValue={processSearch}
-            selectedKey={null}
+            selectedKey={processPickerSelection}
             isClearable
-            onInputChange={setProcessSearch}
+            onInputChange={(value) => {
+              setProcessPickerSelection(null)
+              setProcessSearch(value)
+            }}
             onClear={() => setProcessSearch('')}
+            onOpenChange={(isOpen) => {
+              if (isOpen) setProcessPickerSelection(null)
+            }}
             onSelectionChange={(key) => {
               if (!key) return
+              setProcessPickerSelection(String(key))
               selectionTouchedRef.current = true
               setSelectedProcessKeys((current) => {
                 const next = new Set(current)
@@ -596,7 +587,7 @@ const ProcessTest: React.FC = () => {
                 else next.add(processKey)
                 return next
               })
-              processPickerRef.current?.blur()
+              window.requestAnimationFrame(() => processPickerRef.current?.blur())
             }}
           >
             {catalogs.map((item) => (
@@ -733,11 +724,7 @@ const ProcessTest: React.FC = () => {
               isSelected={allDomainsSelected}
               isIndeterminate={selectedTargets.length > 0 && !allDomainsSelected}
               isDisabled={state.testing || combinedDomains.length === 0}
-              onValueChange={(checked) => {
-                setSelectedDomains(
-                  checked ? new Set(combinedDomains.map((domain) => domain.key)) : new Set()
-                )
-              }}
+              onValueChange={setAllDomainsSelected}
             >
               测试目标（已选 {selectedTargets.length}/{combinedDomains.length}）
             </Checkbox>
@@ -759,14 +746,7 @@ const ProcessTest: React.FC = () => {
                   }}
                   isSelected={selectedDomains.has(domain.key)}
                   isDisabled={state.testing}
-                  onValueChange={(checked) => {
-                    setSelectedDomains((current) => {
-                      const next = new Set(current)
-                      if (checked) next.add(domain.key)
-                      else next.delete(domain.key)
-                      return next
-                    })
-                  }}
+                  onValueChange={(checked) => setDomainSelected(domain.key, checked)}
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm" title={domain.key}>
@@ -791,9 +771,7 @@ const ProcessTest: React.FC = () => {
             disabled={state.testing || proxies.length === 0}
             label="全选节点"
             hint="悬停指标可查看各域名和逐轮结果"
-            onChange={(checked) => {
-              setSelectedNodes(checked ? new Set(proxies.map((proxy) => proxy.name)) : new Set())
-            }}
+            onChange={setAllNodesSelected}
           />
 
           <TestResultTableViewport minWidthClassName="min-w-190">

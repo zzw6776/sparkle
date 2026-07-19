@@ -106,18 +106,24 @@ function normalizeActualConcurrency(value?: number): number {
   return Math.min(4, Math.max(1, Math.trunc(value!)))
 }
 
-const reasoningEffortOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const reasoningEffortOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 
 function reasoningEffortLabel(value: string): string {
   const labels: Record<string, string> = {
-    none: '无推理',
-    minimal: '最低',
-    low: '低',
+    none: '无',
+    minimal: '极低',
+    low: '轻度',
     medium: '中',
     high: '高',
-    xhigh: '最高'
+    xhigh: '极高',
+    max: '最高',
+    ultra: '极高'
   }
   return labels[value] || value
+}
+
+function reasoningEffortDescription(value: string): string | undefined {
+  return value === 'ultra' ? '更快消耗使用额度' : undefined
 }
 
 function lowestReasoningEffort(model: CodexActualTestModelOption): string {
@@ -954,11 +960,8 @@ const CodexTest: React.FC = () => {
       selectedActualModel?.supportedReasoningEfforts.length
         ? selectedActualModel.supportedReasoningEfforts.map((option) => ({
             key: option.reasoningEffort,
-            label: `${reasoningEffortLabel(option.reasoningEffort)}${
-              option.reasoningEffort === selectedActualModel.defaultReasoningEffort
-                ? ' · 模型默认'
-                : ''
-            }`
+            label: reasoningEffortLabel(option.reasoningEffort),
+            description: reasoningEffortDescription(option.reasoningEffort)
           }))
         : [{ key: DEFAULT_CODEX_OPTION, label: '跟随模型默认' }],
     [selectedActualModel]
@@ -1425,7 +1428,7 @@ const CodexTest: React.FC = () => {
                 onChange={changeActualModel}
               />
               <TestOptionSelect
-                label="推理深度"
+                label="推理强度"
                 value={actualReasoningEffort}
                 options={actualReasoningOptions}
                 disabled={anyTesting || actualModelsLoading || codexRuntimeBusy}

@@ -14,6 +14,8 @@ let currentUpload: number | undefined = undefined
 let currentDownload: number | undefined = undefined
 let hasShowTraffic = false
 let drawing = false
+let trayTrafficCanvas: HTMLCanvasElement | null = null
+let trayTrafficContext: CanvasRenderingContext2D | null = null
 
 interface Props {
   iconOnly?: boolean
@@ -225,26 +227,26 @@ const drawTrayTrafficIcon = async (upload: number, download: number): Promise<vo
 
   const uploadText = `${calcTraffic(upload)}/s`
   const downloadText = `${calcTraffic(download)}/s`
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 118 36"><text x="0" y="15" font-size="18" font-family="PingFang SC, Arial" font-weight="bold">↑</text><text x="118" y="15" font-size="18" font-family="PingFang SC, Arial" font-weight="bold" text-anchor="end">${uploadText}</text><text x="0" y="34" font-size="18" font-family="PingFang SC, Arial" font-weight="bold">↓</text><text x="118" y="34" font-size="18" font-family="PingFang SC, Arial" font-weight="bold" text-anchor="end">${downloadText}</text></svg>`
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-  const image = await loadImage(url)
-  window.electron.ipcRenderer.send('trayIconUpdate', image)
-}
+  if (!trayTrafficCanvas) {
+    trayTrafficCanvas = document.createElement('canvas')
+    trayTrafficCanvas.width = 118
+    trayTrafficCanvas.height = 36
+    trayTrafficContext = trayTrafficCanvas.getContext('2d')
+  }
 
-const loadImage = (url: string): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = (): void => {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      canvas.width = 118
-      canvas.height = 36
-      ctx?.drawImage(img, 0, 0)
-      resolve(canvas.toDataURL('image/png'))
-    }
-    img.onerror = (): void => {
-      reject()
-    }
-    img.src = url
-  })
+  const ctx = trayTrafficContext
+  if (!ctx) return
+
+  ctx.clearRect(0, 0, trayTrafficCanvas.width, trayTrafficCanvas.height)
+  ctx.fillStyle = '#000'
+  ctx.font = 'bold 18px "PingFang SC", Arial'
+  ctx.textBaseline = 'alphabetic'
+  ctx.textAlign = 'left'
+  ctx.fillText('↑', 0, 15)
+  ctx.fillText('↓', 0, 34)
+  ctx.textAlign = 'right'
+  ctx.fillText(uploadText, 118, 15)
+  ctx.fillText(downloadText, 118, 34)
+
+  window.electron.ipcRenderer.send('trayIconUpdate', trayTrafficCanvas.toDataURL('image/png'))
 }

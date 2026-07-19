@@ -1,12 +1,4 @@
-import {
-  Autocomplete,
-  AutocompleteItem,
-  Button,
-  Progress,
-  Select,
-  SelectItem,
-  Tooltip
-} from '@heroui/react'
+import { Autocomplete, AutocompleteItem, Button, Progress, Tooltip } from '@heroui/react'
 import BasePage from '@renderer/components/base/base-page'
 import { formatTestHistoryTime } from '@renderer/utils/test-history'
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
@@ -83,46 +75,30 @@ export function TestGroupSelectors({
   onTestGroupChange,
   onSwitchGroupChange
 }: TestGroupSelectorsProps): React.JSX.Element {
+  const groupOptions = groups.map((group) => ({
+    key: group.name,
+    label: group.name
+  }))
+
   return (
     <>
-      <Select
+      <TestOptionSelect
         label="测试节点组"
-        size="sm"
+        value={testGroupName ?? ''}
+        options={groupOptions}
         className="min-w-52 flex-1"
-        classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-        selectedKeys={testGroupName ? new Set([testGroupName]) : new Set()}
-        disallowEmptySelection
-        isDisabled={testGroupDisabled || groups.length === 0}
-        onSelectionChange={(keys) => {
-          const next = keys.currentKey
-          if (next) onTestGroupChange(String(next))
-        }}
-      >
-        {groups.map((group) => (
-          <SelectItem key={group.name}>{group.name}</SelectItem>
-        ))}
-      </Select>
+        disabled={testGroupDisabled}
+        onChange={onTestGroupChange}
+      />
 
-      <Select
+      <TestOptionSelect
         label="切换目标组"
-        size="sm"
+        value={switchGroupName}
+        options={[{ key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' }, ...groupOptions]}
         className="min-w-52 flex-1"
-        classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-        selectedKeys={new Set([switchGroupName])}
-        disallowEmptySelection
-        isDisabled={switchGroupDisabled || groups.length === 0}
-        onSelectionChange={(keys) => {
-          const next = keys.currentKey
-          if (next) onSwitchGroupChange(String(next))
-        }}
-      >
-        {[
-          { key: FOLLOW_TEST_GROUP, label: '跟随测试节点组' },
-          ...groups.map((group) => ({ key: group.name, label: group.name }))
-        ].map((option) => (
-          <SelectItem key={option.key}>{option.label}</SelectItem>
-        ))}
-      </Select>
+        disabled={switchGroupDisabled || groups.length === 0}
+        onChange={onSwitchGroupChange}
+      />
     </>
   )
 }
@@ -130,6 +106,7 @@ export function TestGroupSelectors({
 interface TestOptionSelectOption {
   key: string
   label: string
+  description?: string
 }
 
 interface TestOptionSelectProps {
@@ -151,27 +128,64 @@ export function TestOptionSelect({
   className = 'min-w-40',
   onChange
 }: TestOptionSelectProps): React.JSX.Element {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const selectedOption = options.find((option) => option.key === value)
+  const selectedLabel = selectedOption?.label ?? ''
+  const [inputValue, setInputValue] = useState(selectedLabel)
+  const committedLabelRef = useRef(selectedLabel)
+
+  useEffect(() => {
+    committedLabelRef.current = selectedLabel
+    setInputValue(selectedLabel)
+  }, [selectedLabel])
+
   return (
-    <Select
-      label={label}
-      size="sm"
-      className={className}
-      classNames={{ base: 'data-[disabled=true]:opacity-100' }}
-      selectedKeys={value ? new Set([value]) : new Set()}
-      disallowEmptySelection
-      isDisabled={disabled || options.length === 0}
-      isLoading={loading}
-      onSelectionChange={(keys) => {
-        const next = keys.currentKey
-        if (next) onChange(String(next))
-      }}
-    >
-      {options.map((option) => (
-        <SelectItem key={option.key} textValue={option.label}>
-          {option.label}
-        </SelectItem>
-      ))}
-    </Select>
+    <div className={className}>
+      <Autocomplete
+        ref={inputRef}
+        label={label}
+        size="sm"
+        className="w-full"
+        classNames={{ base: 'data-[disabled=true]:opacity-100' }}
+        inputProps={{
+          classNames: {
+            label: 'text-foreground-500',
+            helperWrapper: 'hidden'
+          }
+        }}
+        inputValue={inputValue}
+        selectedKey={selectedOption?.key ?? null}
+        allowsCustomValue={false}
+        isClearable={false}
+        isDisabled={disabled || options.length === 0}
+        isLoading={loading}
+        onInputChange={setInputValue}
+        onSelectionChange={(key) => {
+          if (key === null) return
+          const next = String(key)
+          const nextOption = options.find((option) => option.key === next)
+          if (!nextOption) return
+
+          committedLabelRef.current = nextOption.label
+          setInputValue(nextOption.label)
+          onChange(next)
+          window.requestAnimationFrame(() => inputRef.current?.blur())
+        }}
+        onBlur={() => {
+          setInputValue(committedLabelRef.current)
+        }}
+      >
+        {options.map((option) => (
+          <AutocompleteItem
+            key={option.key}
+            textValue={option.description ? `${option.label} ${option.description}` : option.label}
+            description={option.description}
+          >
+            {option.label}
+          </AutocompleteItem>
+        ))}
+      </Autocomplete>
+    </div>
   )
 }
 

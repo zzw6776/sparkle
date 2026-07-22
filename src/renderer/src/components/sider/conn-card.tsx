@@ -8,7 +8,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { IoLink } from 'react-icons/io5'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
 import { platform } from '@renderer/utils/init'
-import TrafficChart from './traffic-chart'
+import TrafficChart, { type TrafficChartHandle } from './traffic-chart'
 
 let currentUpload: number | undefined = undefined
 let currentDownload: number | undefined = undefined
@@ -48,12 +48,7 @@ const ConnCard: React.FC<Props> = (props) => {
   } = useSortable({
     id: 'connection'
   })
-  const [trafficData, setTrafficData] = useState(() =>
-    Array(10)
-      .fill(0)
-      .map((v, i) => ({ traffic: v, index: i }))
-  )
-  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const trafficChartRef = useRef<TrafficChartHandle>(null)
 
   const transform = tf ? { x: tf.x, y: tf.y, scaleX: 1, scaleY: 1 } : null
 
@@ -62,19 +57,7 @@ const ConnCard: React.FC<Props> = (props) => {
       setUpload(info.up)
       setDownload(info.down)
 
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current)
-      }
-
-      updateTimeoutRef.current = setTimeout(() => {
-        setTrafficData((prev) => {
-          const newData = [...prev]
-          newData.shift()
-          newData.push({ traffic: info.up + info.down, index: Date.now() })
-          return newData
-        })
-        updateTimeoutRef.current = null
-      }, 100)
+      trafficChartRef.current?.push(info.up + info.down)
 
       if (platform === 'darwin' && showTrafficRef.current) {
         if (drawing) return
@@ -98,9 +81,6 @@ const ConnCard: React.FC<Props> = (props) => {
 
     return (): void => {
       window.electron.ipcRenderer.removeAllListeners('mihomoTraffic')
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current)
-      }
     }
   }, [])
 
@@ -177,7 +157,7 @@ const ConnCard: React.FC<Props> = (props) => {
                 <h3>连接</h3>
               </div>
             </CardFooter>
-            <TrafficChart data={trafficData} isActive={match} />
+            <TrafficChart ref={trafficChartRef} isActive={match} />
           </Card>
         </>
       ) : (

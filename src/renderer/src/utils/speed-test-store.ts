@@ -60,20 +60,6 @@ export function getSpeedTestSnapshot(): SpeedTestStoreSnapshot {
   return snapshot
 }
 
-export function clearSpeedTestResults(proxies: string[]): void {
-  if (snapshot.busy || snapshot.activeGroup) return
-
-  const tests = { ...snapshot.tests }
-  const progresses = { ...snapshot.progresses }
-  const errors = { ...snapshot.errors }
-  proxies.forEach((proxy) => {
-    delete tests[proxy]
-    delete progresses[proxy]
-    delete errors[proxy]
-  })
-  updateSnapshot({ tests, progresses, errors })
-}
-
 function resetSpeedTestStore(): void {
   storeGeneration++
   cancelRequested = false

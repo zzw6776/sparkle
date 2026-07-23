@@ -1,4 +1,4 @@
-export type NetworkTestKind = 'download' | 'codex' | 'codex-actual' | 'process'
+type NetworkTestKind = 'download' | 'codex' | 'codex-actual' | 'process'
 
 let activeTest: NetworkTestKind | undefined
 

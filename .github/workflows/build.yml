@@ -88,11 +88,7 @@ jobs:
           GIT_COMMIT_HASH=$(git rev-parse --short HEAD)
           VERSION=$(jq -r '.version' package.json)
 
-          if [ "${{ github.event.inputs.version }}" == "" ]; then
-            BASE_VERSION=$(echo $VERSION | awk -F. '{print $1"."$2"."$3+1}')
-            VERSION_PREFIX=${VERSION_PREFIX:-beta}
-            RELEASE_VERSION="${BASE_VERSION}-${VERSION_PREFIX}-${GIT_COMMIT_HASH}"
-          else
+          if [ "${{ github.event.inputs.version }}" != "" ]; then
             INPUT_VERSION="${{ github.event.inputs.version }}"
             CLEAN_VERSION=$(echo "$INPUT_VERSION" | sed 's/^v//')
             if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -100,6 +96,18 @@ jobs:
               exit 1
             fi
             RELEASE_VERSION="$CLEAN_VERSION"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            INPUT_VERSION="${GITHUB_REF_NAME}"
+            CLEAN_VERSION=$(echo "$INPUT_VERSION" | sed 's/^v//')
+            if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid version tag: $INPUT_VERSION"
+              exit 1
+            fi
+            RELEASE_VERSION="$CLEAN_VERSION"
+          else
+            BASE_VERSION=$(echo $VERSION | awk -F. '{print $1"."$2"."$3+1}')
+            VERSION_PREFIX=${VERSION_PREFIX:-beta}
+            RELEASE_VERSION="${BASE_VERSION}-${VERSION_PREFIX}-${GIT_COMMIT_HASH}"
           fi
 
           jq --arg version "$RELEASE_VERSION" '.version = $version' package.json > tmp.json && mv tmp.json package.json
@@ -218,6 +226,7 @@ jobs:
             changelog.md
 
   pre-release:
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') }}
     needs: [build]
     runs-on: ubuntu-latest
     steps:
@@ -264,6 +273,17 @@ jobs:
           gh api --method DELETE \
             "repos/${GITHUB_REPOSITORY}/git/refs/tags/${release_tag}" \
             --silent || true
+
+          mapfile -t stale_drafts < <(
+            gh release list \
+              --repo "$GITHUB_REPOSITORY" \
+              --limit 1000 \
+              --json tagName,isDraft,createdAt \
+              --jq 'map(select(.isDraft and (.tagName | startswith("sparkle-ci-build-")))) | sort_by(.createdAt) | reverse | .[10:] | .[].tagName'
+          )
+          for stale_draft in "${stale_drafts[@]}"; do
+            gh release delete "$stale_draft" --repo "$GITHUB_REPOSITORY" --yes || true
+          done
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')
@@ -315,7 +335,7 @@ jobs:
 
       - name: Update Version
         run: |
-          INPUT_VERSION="${{ github.event.inputs.version }}"
+          INPUT_VERSION="${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref_name }}"
           CLEAN_VERSION=$(echo "$INPUT_VERSION" | sed 's/^v//')
           if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version format: $INPUT_VERSION"
@@ -323,11 +343,15 @@ jobs:
           fi
           jq --arg version "$CLEAN_VERSION" '.version = $version' package.json > tmp.json && mv tmp.json package.json
 
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git add package.json
-          git commit -m "update version to $CLEAN_VERSION"
-          git push
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git config --global user.name "github-actions[bot]"
+            git add package.json
+            if ! git diff --cached --quiet; then
+              git commit -m "update version to $CLEAN_VERSION"
+              git push
+            fi
+          fi
 
       - name: Install Dependencies and Updater
         run: |
@@ -344,14 +368,14 @@ jobs:
         uses: 8Mi-Tech/delete-release-assets-action@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref }}
+          tag: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref_name }}
           deleteOnlyFromDrafts: false
 
       - name: Publish Release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref }}
+          tag_name: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref_name }}
           body_path: changelog.md
           files: |
             latest.yml

@@ -23,7 +23,7 @@ export interface ProcessTestTargetCatalog {
 let connections =
   readTestHistory<ControllerConnectionDetail[]>(PROCESS_CONNECTION_HISTORY_KEY) || []
 let connectionsReleased = false
-let selectedProcessKey: string | undefined
+let selectedProcessKeys: string[] | undefined
 let persistTimer: number | undefined
 let catalogBuildTimer: number | undefined
 let catalogCache: ProcessTestTargetCatalog[] | undefined
@@ -93,27 +93,21 @@ export function updateActiveProcessTestConnections(
   schedulePersistConnections()
 }
 
-export function selectProcessTestProcess(key: string): void {
-  selectedProcessKey = key
+export function selectProcessTestProcesses(keys: Iterable<string>): void {
+  selectedProcessKeys = [...new Set(keys)].filter(Boolean)
 }
 
-export function takeSelectedProcessTestProcess(): string | undefined {
-  const key = selectedProcessKey
-  selectedProcessKey = undefined
-  return key
+export function takeSelectedProcessTestProcesses(): string[] | undefined {
+  const keys = selectedProcessKeys
+  selectedProcessKeys = undefined
+  return keys
 }
 
-function parseTarget(
-  connection: ControllerConnectionDetail
+function parseDomainCandidate(
+  value: string,
+  observedPort: number
 ): { host: string; port: number } | null {
-  const candidates = [
-    connection.metadata.host,
-    connection.metadata.sniffHost,
-    connection.metadata.remoteDestination
-  ]
-  let raw = candidates.find((value) => value?.trim())?.trim()
-  if (!raw) return null
-
+  let raw = value.trim()
   let parsedPort: number | undefined
   try {
     if (raw.includes('://')) {
@@ -145,11 +139,28 @@ function parseTarget(
     return null
   }
 
-  const observedPort = Number(connection.metadata.destinationPort)
   const port =
     parsedPort || (Number.isInteger(observedPort) && observedPort > 0 ? observedPort : 443)
-  if (port <= 0 || port > 65535 || connection.metadata.network !== 'tcp') return null
+  if (port <= 0 || port > 65535) return null
   return { host, port }
+}
+
+function parseTarget(
+  connection: ControllerConnectionDetail
+): { host: string; port: number } | null {
+  if (connection.metadata.network !== 'tcp') return null
+  const observedPort = Number(connection.metadata.destinationPort)
+  const candidates = [
+    connection.metadata.host,
+    connection.metadata.sniffHost,
+    connection.metadata.remoteDestination
+  ]
+  for (const candidate of candidates) {
+    if (!candidate?.trim()) continue
+    const target = parseDomainCandidate(candidate, observedPort)
+    if (target) return target
+  }
+  return null
 }
 
 function buildProcessTestCatalog(): ProcessTestTargetCatalog[] {

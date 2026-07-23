@@ -308,8 +308,12 @@ function aggregateResult(
   }
 }
 
-function probeCodexBinary(candidate: string): Promise<CodexProbeResult> {
+function probeCodexBinary(candidate: string, signal?: AbortSignal): Promise<CodexProbeResult> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ available: false, reason: '测试已停止' })
+      return
+    }
     let settled = false
     let output = ''
     let child: ChildProcess
@@ -327,12 +331,18 @@ function probeCodexBinary(candidate: string): Promise<CodexProbeResult> {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       resolve(result)
+    }
+    const onAbort = (): void => {
+      terminateChildProcess(child, true)
+      finish({ available: false, reason: '测试已停止' })
     }
     const timer = setTimeout(() => {
       terminateChildProcess(child, true)
       finish({ available: false, reason: '探测超时' })
     }, 5000)
+    signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout?.on('data', (chunk: Buffer | string) => {
       output += chunk.toString()
     })
@@ -356,15 +366,18 @@ function probeCodexBinary(candidate: string): Promise<CodexProbeResult> {
   })
 }
 
-async function resolveCodexBinary(): Promise<string> {
+async function resolveCodexBinary(signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw abortError()
   if (resolvedCodexBinary) {
-    const cached = await probeCodexBinary(resolvedCodexBinary)
+    const cached = await probeCodexBinary(resolvedCodexBinary, signal)
+    if (signal?.aborted) throw abortError()
     if (cached.available) return resolvedCodexBinary
     resolvedCodexBinary = undefined
   }
   const failures: Array<{ candidate: string; reason: string }> = []
   for (const candidate of getCodexBinaryCandidates()) {
-    const result = await probeCodexBinary(candidate)
+    const result = await probeCodexBinary(candidate, signal)
+    if (signal?.aborted) throw abortError()
     if (result.available) {
       resolvedCodexBinary = candidate
       return candidate
@@ -434,9 +447,18 @@ function getSupportedCodexFeatures(
   env: NodeJS.ProcessEnv
 ): Promise<ReadonlySet<string> | undefined> {
   if (supportedFeaturesRequest?.binary === binary) return supportedFeaturesRequest.promise
-  const promise = querySupportedCodexFeatures(binary, env)
-  supportedFeaturesRequest = { binary, promise }
-  return promise
+  const request = {
+    binary,
+    promise: querySupportedCodexFeatures(binary, env)
+  }
+  request.promise = request.promise.then((features) => {
+    if (features === undefined && supportedFeaturesRequest === request) {
+      supportedFeaturesRequest = undefined
+    }
+    return features
+  })
+  supportedFeaturesRequest = request
+  return request.promise
 }
 
 function codexActualTestAppServerArgs(supportedFeatures?: ReadonlySet<string>): string[] {
@@ -1026,16 +1048,6 @@ export async function mihomoCodexActualTest(
     uniqueProxies.length,
     Math.max(1, Math.trunc(concurrency) || 2)
   )
-  await ensureRuntimeTestChannelCapacity(requestedConcurrency)
-  const channels = getRuntimeCodexTestChannels()
-  if (channels.length === 0) throw new Error('Codex 测试通道不可用，请重启内核后重试')
-  const normalizedConcurrency = Math.min(
-    MAX_ACTUAL_CONCURRENCY,
-    channels.length,
-    uniqueProxies.length,
-    requestedConcurrency
-  )
-  const binary = await resolveCodexBinary()
   const releaseTestChannel = acquireNetworkTestChannel('codex-actual')
   const current: ActiveCodexActualTest = {
     controller: new AbortController(),
@@ -1043,21 +1055,33 @@ export async function mihomoCodexActualTest(
     cancelled: false
   }
   activeCodexActualTest = current
-  const roundResults = new Map<string, CodexActualTestRoundResult[]>()
-  const clients = new Map<number, CodexAppServerClient>()
-  const total = uniqueProxies.length * normalizedRounds
-  let completed = 0
-
-  const getClient = (channel: TestChannel): CodexAppServerClient => {
-    const existing = clients.get(channel.port)
-    if (existing) return existing
-    const client = new CodexAppServerClient(binary, current.controller.signal, channel.port)
-    clients.set(channel.port, client)
-    current.clients.add(client)
-    return client
-  }
 
   try {
+    await ensureRuntimeTestChannelCapacity(requestedConcurrency)
+    if (current.controller.signal.aborted) throw abortError()
+    const channels = getRuntimeCodexTestChannels()
+    if (channels.length === 0) throw new Error('Codex 测试通道不可用，请重启内核后重试')
+    const normalizedConcurrency = Math.min(
+      MAX_ACTUAL_CONCURRENCY,
+      channels.length,
+      uniqueProxies.length,
+      requestedConcurrency
+    )
+    const binary = await resolveCodexBinary(current.controller.signal)
+    const roundResults = new Map<string, CodexActualTestRoundResult[]>()
+    const clients = new Map<number, CodexAppServerClient>()
+    const total = uniqueProxies.length * normalizedRounds
+    let completed = 0
+
+    const getClient = (channel: TestChannel): CodexAppServerClient => {
+      const existing = clients.get(channel.port)
+      if (existing) return existing
+      const client = new CodexAppServerClient(binary, current.controller.signal, channel.port)
+      clients.set(channel.port, client)
+      current.clients.add(client)
+      return client
+    }
+
     const runSample = async (
       proxy: string,
       round: number,

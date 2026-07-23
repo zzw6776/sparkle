@@ -66,6 +66,12 @@ function targetKey(target: ProcessTestTargetRequest): string {
   return `${target.host}:${target.port}`
 }
 
+function appendSample<T>(samples: Map<string, T[]>, proxy: string, sample: T): void {
+  const current = samples.get(proxy)
+  if (current) current.push(sample)
+  else samples.set(proxy, [sample])
+}
+
 function connectProxyTunnel(
   localPort: number,
   target: ProcessTestTargetRequest,
@@ -360,7 +366,7 @@ export async function mihomoProcessTest(
             for (let round = 1; round <= normalizedRounds; round++) {
               for (const target of uniqueTargets) {
                 const sample: FailedSample = { ...target, round, error: selectionError }
-                failed.set(proxy, [...(failed.get(proxy) || []), sample])
+                appendSample(failed, proxy, sample)
                 completed++
                 onProgress?.({
                   proxy,
@@ -399,11 +405,11 @@ export async function mihomoProcessTest(
               try {
                 const probe = await runProbe(channel.port, target, current.controller.signal)
                 const sample: SuccessfulSample = { ...target, round, ...probe }
-                successful.set(proxy, [...(successful.get(proxy) || []), sample])
+                appendSample(successful, proxy, sample)
               } catch (error) {
                 if (current.cancelled || current.controller.signal.aborted) throw abortError()
                 const sample: FailedSample = { ...target, round, error: errorMessage(error) }
-                failed.set(proxy, [...(failed.get(proxy) || []), sample])
+                appendSample(failed, proxy, sample)
               }
 
               completed++

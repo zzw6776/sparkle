@@ -54,7 +54,15 @@ import { notify } from '@renderer/utils/notification'
 import { isTestableProxy } from '@renderer/utils/testable-proxy'
 import { copyText } from '@renderer/utils/clipboard'
 import { calcTraffic } from '@renderer/utils/calc'
-import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { MdCheckCircle, MdContentCopy, MdErrorOutline } from 'react-icons/md'
 import { Virtuoso } from 'react-virtuoso'
 import { useNavigate } from 'react-router-dom'
@@ -233,7 +241,11 @@ function actualResultGrade(result: CodexActualTestResult): {
   label: string
   color: 'success' | 'primary' | 'warning' | 'danger'
 } {
-  if (result.successRate < 0.67 || result.routeVerifiedRate < 1 || result.score === undefined) {
+  if (
+    result.successRate < 0.67 ||
+    (result.routeVerifiedRate ?? 0) < 1 ||
+    result.score === undefined
+  ) {
     return { label: '较差', color: 'danger' }
   }
   if (result.score < 4000) return { label: '优秀', color: 'success' }
@@ -255,6 +267,7 @@ function actualMetricResult(
   label: string
 ): React.ReactNode {
   if (!result) return <span>—</span>
+  const roundResults = result.roundResults ?? []
   return (
     <TestResultTooltip
       placement="top"
@@ -270,7 +283,7 @@ function actualMetricResult(
               {metric(result.queueMs)} · 抖动 {metric(result.jitterMs)}
             </div>
           )}
-          {result.roundResults.map((round) => (
+          {roundResults.map((round) => (
             <div key={round.round} className="flex max-w-96 justify-between gap-3">
               <span className="shrink-0">第 {round.round} 轮</span>
               {round.success ? (
@@ -450,6 +463,9 @@ const CodexActualRow = memo<CodexActualRowProps>(
     onSwitch
   }) => {
     const grade = result ? actualResultGrade(result) : undefined
+    const roundResults = result?.roundResults ?? []
+    const routeVerifiedRate = result?.routeVerifiedRate ?? 0
+    const tokenUsage = result?.tokenUsage
     return (
       <TestResultTableRow columnsClassName={ACTUAL_TABLE_COLUMNS}>
         <TestResultNodeCell
@@ -472,7 +488,7 @@ const CodexActualRow = memo<CodexActualRowProps>(
                 <div>
                   成功：{result.succeeded}/{result.completedRounds} 轮
                 </div>
-                {result.roundResults.map((round) => (
+                {roundResults.map((round) => (
                   <div key={round.round} className="flex max-w-96 gap-3">
                     <span>第 {round.round} 轮</span>
                     <span className={round.success ? '' : 'text-danger'}>
@@ -497,7 +513,7 @@ const CodexActualRow = memo<CodexActualRowProps>(
             content={
               <div className="space-y-1 px-1 py-0.5 text-xs">
                 <div>只有经过对应隐藏监听和隐藏代理组才算验证成功</div>
-                {result.roundResults.map((round) => (
+                {roundResults.map((round) => (
                   <div key={round.round} className="border-t border-divider pt-1">
                     <div className="flex justify-between gap-4">
                       <span>第 {round.round} 轮</span>
@@ -518,7 +534,9 @@ const CodexActualRow = memo<CodexActualRowProps>(
                         <div>
                           远端：{route.remoteDestination || route.destinationIP || '未报告'}
                         </div>
-                        <div className="break-all">链路：{route.chains.join(' → ')}</div>
+                        <div className="break-all">
+                          链路：{(route.chains ?? []).join(' → ') || '未报告'}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -527,9 +545,9 @@ const CodexActualRow = memo<CodexActualRowProps>(
             }
           >
             <span
-              className={`inline-flex ${result.routeVerifiedRate === 1 ? 'text-success' : 'text-danger'}`}
+              className={`inline-flex ${routeVerifiedRate === 1 ? 'text-success' : 'text-danger'}`}
             >
-              {Math.round(result.routeVerifiedRate * 100)}%
+              {Math.round(routeVerifiedRate * 100)}%
             </span>
           </TestResultTooltip>
         ) : (
@@ -540,13 +558,13 @@ const CodexActualRow = memo<CodexActualRowProps>(
             placement="top"
             content={
               <div className="space-y-1 px-1 py-0.5 text-xs">
-                <div>总计：{result.tokenUsage.totalTokens}</div>
-                <div>输入：{result.tokenUsage.inputTokens}</div>
-                <div>缓存输入：{result.tokenUsage.cachedInputTokens}</div>
-                <div>输出：{result.tokenUsage.outputTokens}</div>
-                <div>推理输出：{result.tokenUsage.reasoningOutputTokens}</div>
+                <div>总计：{tokenUsage?.totalTokens ?? '—'}</div>
+                <div>输入：{tokenUsage?.inputTokens ?? '—'}</div>
+                <div>缓存输入：{tokenUsage?.cachedInputTokens ?? '—'}</div>
+                <div>输出：{tokenUsage?.outputTokens ?? '—'}</div>
+                <div>推理输出：{tokenUsage?.reasoningOutputTokens ?? '—'}</div>
                 <div className="border-t border-divider pt-1">
-                  {result.roundResults.map((round) => (
+                  {roundResults.map((round) => (
                     <div key={round.round} className="flex justify-between gap-4">
                       <span>第 {round.round} 轮</span>
                       <span>{round.tokenUsage?.totalTokens ?? '—'}</span>
@@ -556,7 +574,7 @@ const CodexActualRow = memo<CodexActualRowProps>(
               </div>
             }
           >
-            <span className="inline-flex">{result.tokenUsage.totalTokens}</span>
+            <span className="inline-flex">{tokenUsage?.totalTokens ?? '—'}</span>
           </TestResultTooltip>
         ) : (
           <span>—</span>
@@ -857,6 +875,7 @@ const CodexTest: React.FC = () => {
   const [groupName, setGroupName] = useState(() => state.groupName || actualState.groupName || '')
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
   const [actualSelected, setActualSelected] = useState<Set<string>>(new Set())
+  const actualSelectionGroupRef = useRef<string | undefined>(undefined)
   const [rounds, setRounds] = useState(3)
   const [actualRounds, setActualRounds] = useState(1)
   const [actualTopCount, setActualTopCount] = useState('5')
@@ -1136,7 +1155,7 @@ const CodexTest: React.FC = () => {
       ): string | number | undefined => {
         if (actualSortKey === 'name') return proxy.name
         if (actualSortKey === 'linkScore') return visibleResults[proxy.name]?.score
-        if (actualSortKey === 'tokens') return result?.tokenUsage.totalTokens
+        if (actualSortKey === 'tokens') return result?.tokenUsage?.totalTokens
         if (actualSortKey === 'grade') return actualGradeRank(result)
         return result?.[actualSortKey]
       }
@@ -1279,6 +1298,14 @@ const CodexTest: React.FC = () => {
     },
     [proxies, visibleResults]
   )
+
+  useEffect(() => {
+    if (mode !== 'actual' || !group?.name || actualSelectionGroupRef.current === group.name) {
+      return
+    }
+    actualSelectionGroupRef.current = group.name
+    applyActualTopSelection(actualTopCount)
+  }, [actualTopCount, applyActualTopSelection, group?.name, mode])
 
   const changeActualTopCount = useCallback(
     (value: string): void => {

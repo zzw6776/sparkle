@@ -59,6 +59,8 @@ export async function patchControledMihomoConfig(patch: Partial<MihomoConfig>): 
     controledMihomoConfig.hosts = patch.hosts
   }
   controledMihomoConfig = deepMerge(controledMihomoConfig, patch)
-  await generateProfile()
+  // 热更新配置时当前内核仍监听原端口；隐藏测速通道必须保持不变，
+  // 新的通道容量会在下一次内核启动时由 startCore 应用。
+  await generateProfile({ preserveRuntimeTestPorts: true })
   await writeFile(controledMihomoConfigPath(), stringifyYaml(controledMihomoConfig), 'utf-8')
 }

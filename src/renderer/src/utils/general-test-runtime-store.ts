@@ -11,7 +11,7 @@ export interface DownloadRoundMeasurement {
   error?: string
 }
 
-export interface GeneralTestSession {
+interface GeneralTestSession {
   running: boolean
   round: number
   rounds: number

@@ -29,7 +29,7 @@ interface ActiveGroupDelayRun {
   cancel: () => void
 }
 
-export type DelayTestRun = Record<string, number>
+type DelayTestRun = Record<string, number>
 
 let snapshot: DelayTestStoreSnapshot = {
   delays: {},
@@ -96,6 +96,7 @@ export function releaseDelayTestResults(run: DelayTestRun): void {
 
   Object.entries(run).forEach(([proxy, version]) => {
     if (proxyRunVersions.get(proxy) !== version || snapshot.testing.has(proxy)) return
+    proxyRunVersions.delete(proxy)
     delete delays[proxy]
     managed.delete(proxy)
     changed = true
@@ -125,15 +126,19 @@ export function stopGroupDelayTest(group: string): boolean {
   groupRunVersions.delete(group)
   active.cancel()
 
+  const delays = { ...snapshot.delays }
+  const managed = new Set(snapshot.managed)
   const testing = new Set(snapshot.testing)
   Object.entries(active.run).forEach(([proxy, version]) => {
     if (proxyRunVersions.get(proxy) !== version) return
     proxyRunVersions.delete(proxy)
+    delete delays[proxy]
+    managed.delete(proxy)
     testing.delete(proxy)
   })
   const groups = new Set(snapshot.groups)
   groups.delete(group)
-  updateSnapshot({ testing, groups })
+  updateSnapshot({ delays, managed, testing, groups })
   return true
 }
 

@@ -2,11 +2,7 @@ import { Button, Card, CardBody, Chip } from '@heroui/react'
 import { Avatar } from '@heroui-v3/react'
 import BasePage from '@renderer/components/base/base-page'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
-import {
-  getImageDataURL,
-  mihomoChangeProxy,
-  mihomoCloseConnections
-} from '@renderer/utils/ipc'
+import { getImageDataURL, mihomoChangeProxy, mihomoCloseConnections } from '@renderer/utils/ipc'
 import { FaLocationCrosshairs } from 'react-icons/fa6'
 import {
   memo,
@@ -53,6 +49,7 @@ function compareProxyDelay(
 ): number {
   const delayA = getDisplayedDelay(a, delayTestState)
   const delayB = getDisplayedDelay(b, delayTestState)
+  if (delayA === delayB) return a.name.localeCompare(b.name)
   if (delayA === -1) return -1
   if (delayB === -1) return 1
   if (delayA === 0) return 1
@@ -67,7 +64,7 @@ function compareProxySpeed(
 ): number {
   const speedA = speedTests[a.name]?.bytesPerSecond ?? -1
   const speedB = speedTests[b.name]?.bytesPerSecond ?? -1
-  return speedB - speedA
+  return speedB - speedA || a.name.localeCompare(b.name)
 }
 
 function getProviderName(proxy: ProxyLike): string | undefined {
@@ -344,9 +341,7 @@ const Proxies: React.FC = () => {
           : (group.all as ProxyLike[])
 
         if (proxyDisplayOrder === 'delay') {
-          groupProxies = [...groupProxies].sort((a, b) =>
-            compareProxyDelay(a, b, delayTestState)
-          )
+          groupProxies = [...groupProxies].sort((a, b) => compareProxyDelay(a, b, delayTestState))
         }
         if (proxyDisplayOrder === 'name') {
           groupProxies = [...groupProxies].sort((a, b) => a.name.localeCompare(b.name))
@@ -407,12 +402,9 @@ const Proxies: React.FC = () => {
     [getDelayTestUrl, mutate]
   )
 
-  const onProxySpeedTest = useCallback(
-    async (proxy: ProxyLike): Promise<void> => {
-      await toggleProxySpeedTest(proxy.name)
-    },
-    []
-  )
+  const onProxySpeedTest = useCallback(async (proxy: ProxyLike): Promise<void> => {
+    await toggleProxySpeedTest(proxy.name)
+  }, [])
 
   const onGroupSpeedTest = useCallback(
     async (index: number): Promise<void> => {
@@ -475,14 +467,7 @@ const Proxies: React.FC = () => {
         releaseDelayTestResults(run)
       }
     },
-    [
-      allProxies,
-      groups,
-      delayTestUseGroupApi,
-      delayTestConcurrency,
-      mutate,
-      getDelayTestUrl
-    ]
+    [allProxies, groups, delayTestUseGroupApi, delayTestConcurrency, mutate, getDelayTestUrl]
   )
 
   const calcCols = useCallback((): number => {
@@ -783,13 +768,7 @@ const Proxies: React.FC = () => {
         <div>Never See This</div>
       )
     },
-    [
-      speedTests,
-      speedTestProgresses,
-      speedTestErrors,
-      speedTesting,
-      delayTestState
-    ]
+    [speedTests, speedTestProgresses, speedTestErrors, speedTesting, delayTestState]
   )
 
   return (

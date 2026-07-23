@@ -39,7 +39,7 @@ import {
   ProcessTestDomainTarget,
   ProcessTestTargetCatalog,
   releaseProcessTestTargetMemory,
-  takeSelectedProcessTestProcess,
+  takeSelectedProcessTestProcesses,
   updateActiveProcessTestConnections
 } from '@renderer/utils/process-test-targets'
 import { isTestableProxy } from '@renderer/utils/testable-proxy'
@@ -141,7 +141,7 @@ const ProcessMetricResult: React.FC<ProcessMetricResultProps> = (props) => {
             <div className="font-medium">
               {title}：{metric(value)}
             </div>
-            {result.domains.map((domain) => (
+            {(result.domains ?? []).map((domain) => (
               <div key={`${domain.host}:${domain.port}`} className="border-t border-divider pt-1">
                 <div className="font-medium">
                   {domain.host}:{domain.port} · {metric(domain.totalMs)}
@@ -285,16 +285,16 @@ const ProcessTest: React.FC = () => {
     getProcessTestSnapshot
   )
   const [catalogs, setCatalogs] = useState(() => getProcessTestCatalog())
-  const [requestedProcessKey] = useState(() => takeSelectedProcessTestProcess())
+  const [requestedProcessKeys] = useState(() => takeSelectedProcessTestProcesses())
   const [savedProcessKeys] = useState(() => readTestHistory<string[]>(PROCESS_TEST_SELECTION_KEY))
-  const preferredProcessKeys = requestedProcessKey
-    ? [requestedProcessKey]
+  const preferredProcessKeys = requestedProcessKeys
+    ? requestedProcessKeys
     : savedProcessKeys !== undefined
       ? savedProcessKeys
       : state.processKeys || (catalogs[0] ? [catalogs[0].key] : [])
   const preferredProcessKeysRef = useRef(preferredProcessKeys)
   const selectionTouchedRef = useRef(
-    !requestedProcessKey && savedProcessKeys !== undefined && savedProcessKeys.length === 0
+    !requestedProcessKeys && savedProcessKeys !== undefined && savedProcessKeys.length === 0
   )
   const testingRef = useRef(state.testing)
   testingRef.current = state.testing

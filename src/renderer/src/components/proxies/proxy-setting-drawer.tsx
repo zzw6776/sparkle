@@ -317,7 +317,11 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                     min={1000}
                     max={30000}
                     onChange={(event) => {
-                      patchAppConfig({ speedTestDuration: parseInt(event.target.value) })
+                      const value = parseInt(event.target.value)
+                      if (!Number.isFinite(value)) return
+                      patchAppConfig({
+                        speedTestDuration: Math.min(30000, Math.max(1000, value))
+                      })
                     }}
                   />
                   <InputGroup.Suffix>ms</InputGroup.Suffix>
@@ -332,8 +336,10 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                     min={2}
                     max={1000}
                     onChange={(event) => {
+                      const value = parseInt(event.target.value)
+                      if (!Number.isFinite(value)) return
                       patchAppConfig({
-                        speedTestMaxBytes: parseInt(event.target.value) * 1_000_000
+                        speedTestMaxBytes: Math.min(1000, Math.max(2, value)) * 1_000_000
                       })
                     }}
                   />

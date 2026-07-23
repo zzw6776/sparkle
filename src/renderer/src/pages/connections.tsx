@@ -45,7 +45,7 @@ import {
   getRetainedConnectionHistory,
   processTestKey,
   releaseProcessTestTargetMemory,
-  selectProcessTestProcess,
+  selectProcessTestProcesses,
   updateProcessTestConnections
 } from '@renderer/utils/process-test-targets'
 
@@ -443,11 +443,9 @@ const Connections: React.FC = () => {
       }
     }
 
-    window.electron.ipcRenderer.on('mihomoConnections', handleConnections)
+    const unsubscribe = window.electron.ipcRenderer.on('mihomoConnections', handleConnections)
 
-    return (): void => {
-      window.electron.ipcRenderer.removeAllListeners('mihomoConnections')
-    }
+    return unsubscribe
   }, [connectionInterval])
 
   useEffect(() => {
@@ -869,8 +867,14 @@ const Connections: React.FC = () => {
     (key: string) => {
       const targetGroup = connectionGroupsRef.current.find((item) => item.key === key)
       if (!targetGroup) return
-      selectProcessTestProcess(
-        processTestKey(targetGroup.processPath, targetGroup.process, targetGroup.sourceIP)
+      selectProcessTestProcesses(
+        targetGroup.connections.map((connection) =>
+          processTestKey(
+            connection.metadata.processPath,
+            connection.metadata.process,
+            connection.metadata.sourceIP
+          )
+        )
       )
       navigate('/speed-test/process')
     },
@@ -937,13 +941,7 @@ const Connections: React.FC = () => {
         />
       )
     },
-    [
-      toggleGroupStable,
-      closeGroupStable,
-      openProcessTest,
-      pinnedProcessKeys,
-      togglePinnedProcess
-    ]
+    [toggleGroupStable, closeGroupStable, openProcessTest, pinnedProcessKeys, togglePinnedProcess]
   )
 
   return (

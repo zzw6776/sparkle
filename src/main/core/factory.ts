@@ -35,9 +35,10 @@ let runtimeCodexTestPorts: number[] = []
 
 interface GenerateProfileOptions {
   reuseTestPorts?: RuntimeTestPorts
+  preserveRuntimeTestPorts?: boolean
 }
 
-export interface RuntimeTestPorts {
+interface RuntimeTestPorts {
   speedTestPort: number
   codexTestPorts: number[]
 }
@@ -70,11 +71,22 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
   const profile = deepMerge(JSON.parse(JSON.stringify(currentProfile)), configToMerge)
 
   configureDevelopmentIsolation(profile)
+  const reusableRuntimeTestPorts =
+    options.reuseTestPorts ||
+    (options.preserveRuntimeTestPorts && runtimeCodexTestPorts.length > 0
+      ? {
+          speedTestPort: runtimeSpeedTestPort,
+          codexTestPorts: [...runtimeCodexTestPorts]
+        }
+      : undefined)
+  const runtimeTestChannelCapacity =
+    reusableRuntimeTestPorts?.codexTestPorts.length ??
+    normalizeTestChannelCapacity(testChannelCapacity)
   await configureTestChannels(
     profile,
     speedTestPort,
-    normalizeTestChannelCapacity(testChannelCapacity),
-    options.reuseTestPorts
+    runtimeTestChannelCapacity,
+    reusableRuntimeTestPorts
   )
   await cleanProfile(profile, controlDns, controlSniff)
 
@@ -91,7 +103,7 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
 
 export const SPEED_TEST_GROUP = '__SPARKLE_SPEEDTEST__'
 const SPEED_TEST_LISTENER = 'sparkle-speedtest'
-export const DEFAULT_TEST_CHANNEL_CAPACITY = 6
+const DEFAULT_TEST_CHANNEL_CAPACITY = 6
 export const MAX_CODEX_TEST_CONCURRENCY = 16
 const CODEX_TEST_GROUP_PREFIX = '__SPARKLE_CODEX_TEST_'
 const CODEX_TEST_LISTENER_PREFIX = 'sparkle-codex-test-'

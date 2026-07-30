@@ -210,6 +210,18 @@ interface ControllerRulesDetail {
   }
 }
 
+interface ControllerRuleMatchResult {
+  url: string
+  host: string
+  port: number
+  ruleIndex?: number
+  rule: string
+  rulePayload: string
+  ruleProxy: string
+  chains: string[]
+  destinationIP: string
+}
+
 // ${api}/version
 interface ControllerVersion {
   version: string

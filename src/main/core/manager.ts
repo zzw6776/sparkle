@@ -202,6 +202,17 @@ function delay(ms: number): Promise<void> {
   })
 }
 
+async function recoverDNSAfterCoreStartupFailure(error: unknown): Promise<never> {
+  try {
+    await recoverDNS()
+  } catch (recoveryError) {
+    await appendAppLog(
+      `[Manager]: recover dns after core startup failure failed, ${recoveryError}\n`
+    )
+  }
+  throw error
+}
+
 type ServiceCoreConnectionProbe = {
   reachable: boolean
   running: boolean
@@ -216,7 +227,10 @@ async function startMihomoApiStreams(): Promise<void> {
   directCoreState.retry = 10
 }
 
-async function completeCoreInitialization(logLevel?: LogLevel): Promise<void> {
+async function completeCoreInitialization(
+  logLevel?: LogLevel,
+  enableServiceDNS = false
+): Promise<void> {
   const tasks: Promise<unknown>[] = [
     delay(100).then(() => {
       mainWindow?.webContents.send('groupsUpdated')
@@ -241,6 +255,13 @@ async function completeCoreInitialization(logLevel?: LogLevel): Promise<void> {
   }
 
   await Promise.all(tasks)
+  if (enableServiceDNS) {
+    try {
+      await setPublicDNS()
+    } catch (error) {
+      await appendAppLog(`[Manager]: start enhanced DNS failed, ${error}\n`)
+    }
+  }
   setMihomoLogSource('ws')
 }
 
@@ -345,6 +366,7 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
   const { 'log-level': logLevel, tun } = controlledMihomoConfig
   const { current } = await getProfileConfig()
   const useServiceCore = corePermissionMode === 'service' && !detached
+  const enableServiceDNS = Boolean(tun?.enable && autoSetDNSMode === 'service')
 
   let corePath: string
   try {
@@ -397,7 +419,7 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     await stopCore()
   }
   setMihomoLogSource('out')
-  if (tun?.enable && autoSetDNSMode !== 'none') {
+  if (tun?.enable && autoSetDNSMode === 'exec') {
     try {
       await setPublicDNS()
     } catch (error) {
@@ -474,7 +496,7 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     }
     await serviceCoreRuntime.ensureStreamsStarted()
     initialized = true
-    return [completeCoreInitialization(logLevel)]
+    return [completeCoreInitialization(logLevel, enableServiceDNS)]
   }
 
   const providerTracker = createProviderInitializationTracker(await getRuntimeConfig())
@@ -566,7 +588,7 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
                 if (providerTracker.isReady(logLine)) {
                   await waitForMihomoReady()
                   initialized = true
-                  completeCoreInitialization(logLevel)
+                  completeCoreInitialization(logLevel, enableServiceDNS)
                     .then(() => resolve())
                     .catch(reject)
                 }
@@ -603,13 +625,21 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
         .then(async () => {
           initialized = true
           await startMihomoApiStreams()
-          resolve([completeCoreInitialization(logLevel)])
+          resolve([completeCoreInitialization(logLevel, enableServiceDNS)])
         })
         .catch(reject)
     })
   }
 
-  return coreStartupMode === 'post-up' ? waitForCoreReadyByHook() : waitForCoreReadyByLog()
+  let startupPromises: Promise<void>[]
+  try {
+    startupPromises = await (coreStartupMode === 'post-up'
+      ? waitForCoreReadyByHook()
+      : waitForCoreReadyByLog())
+  } catch (error) {
+    return recoverDNSAfterCoreStartupFailure(error)
+  }
+  return startupPromises.map((promise) => promise.catch(recoverDNSAfterCoreStartupFailure))
 }
 
 export async function stopCore(force = false): Promise<void> {

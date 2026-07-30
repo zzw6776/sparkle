@@ -10,6 +10,7 @@ import {
   mihomoProxyProviders,
   mihomoRuleProviders,
   mihomoRules,
+  mihomoMatchRule,
   mihomoUnfixedProxy,
   mihomoUpdateProxyProviders,
   mihomoUpdateRuleProviders,
@@ -243,6 +244,7 @@ export function registerIpcMainHandlers(): void {
     ipcErrorWrapper(mihomoCloseConnections)(name)
   )
   ipcMain.handle('mihomoRules', ipcErrorWrapper(mihomoRules))
+  ipcMain.handle('mihomoMatchRule', (_e, url) => ipcErrorWrapper(mihomoMatchRule)(url))
   ipcMain.handle('mihomoProxies', ipcErrorWrapper(mihomoProxies))
   ipcMain.handle('mihomoGroups', ipcErrorWrapper(mihomoGroups))
   ipcMain.handle('mihomoProxyProviders', ipcErrorWrapper(mihomoProxyProviders))

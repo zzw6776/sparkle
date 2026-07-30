@@ -69,14 +69,9 @@ export function buildConnectionGroups(
   sortGroups(rows, sort, asc)
   if (pinnedKeys.length === 0) return rows
 
-  const pinnedOrder = new Map<string, number>()
-  pinnedKeys.forEach((key, index) => {
-    if (key && !pinnedOrder.has(key)) pinnedOrder.set(key, index)
-  })
-  const pinned = rows
-    .filter((row) => pinnedOrder.has(row.key))
-    .sort((a, b) => pinnedOrder.get(a.key)! - pinnedOrder.get(b.key)!)
-  const unpinned = rows.filter((row) => !pinnedOrder.has(row.key))
+  const pinnedSet = new Set(pinnedKeys.filter(Boolean))
+  const pinned = rows.filter((row) => pinnedSet.has(row.key))
+  const unpinned = rows.filter((row) => !pinnedSet.has(row.key))
   return [...pinned, ...unpinned]
 }
 

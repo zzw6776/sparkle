@@ -24,6 +24,7 @@ import { existsSync, writeFileSync } from 'fs'
 import path from 'path'
 import { is } from '@electron-toolkit/utils'
 import { createServer } from 'node:net'
+import { systemDNSListenAddress } from './system-dns-config'
 
 let runtimeConfigStr: string,
   rawProfileStr: string,
@@ -49,6 +50,7 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
     diffWorkDir = false,
     controlDns = true,
     controlSniff = true,
+    autoSetDNSMode = 'none',
     speedTestPort = 17891,
     testChannelCapacity
   } = await getAppConfig()
@@ -71,6 +73,7 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
   const profile = deepMerge(JSON.parse(JSON.stringify(currentProfile)), configToMerge)
 
   configureDevelopmentIsolation(profile)
+  configureSystemDNSListener(profile, autoSetDNSMode)
   const reusableRuntimeTestPorts =
     options.reuseTestPorts ||
     (options.preserveRuntimeTestPorts && runtimeCodexTestPorts.length > 0
@@ -151,6 +154,22 @@ function configureDevelopmentIsolation(profile: MihomoConfig): void {
   // A subscription may expose a fixed local DNS port. The installed app can
   // already own that port, while the development core only needs internal DNS.
   delete profile.dns.listen
+}
+
+function configureSystemDNSListener(
+  profile: MihomoConfig,
+  autoSetDNSMode: 'none' | 'exec' | 'service'
+): void {
+  if (
+    process.platform !== 'darwin' ||
+    autoSetDNSMode !== 'service' ||
+    !profile.tun?.enable ||
+    !profile.dns?.enable
+  ) {
+    return
+  }
+
+  profile.dns.listen = systemDNSListenAddress
 }
 
 function isLoopbackPortAvailable(port: number): Promise<boolean> {

@@ -4,6 +4,7 @@ import { readFile, stat, writeFile } from 'fs/promises'
 import { Writable } from 'stream'
 import { getAppConfig } from '../config/app'
 import { appLogPath, coreLogPath, substoreLogPath } from './dirs'
+import { safeSendToWindow } from './webContents'
 
 type LogTarget = 'app' | 'core' | 'substore'
 type MihomoLogSource = 'out' | 'ws'
@@ -310,9 +311,7 @@ function pushCachedLog(log: ControllerLog): CachedControllerLog {
 
 function broadcastLog(log: CachedControllerLog): void {
   BrowserWindow.getAllWindows().forEach((window) => {
-    if (!window.isDestroyed()) {
-      window.webContents.send('mihomoLogs', log)
-    }
+    safeSendToWindow(window, 'mihomoLogs', log)
   })
 }
 

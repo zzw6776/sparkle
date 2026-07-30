@@ -636,19 +636,43 @@ const Connections: React.FC = () => {
 
   const handleOrderByChange = useCallback(
     async (v: unknown) => {
-      await patchAppConfig({
-        connectionOrderBy: (v as { currentKey: string }).currentKey as
-          'time' | 'upload' | 'download' | 'uploadSpeed' | 'downloadSpeed' | 'process'
-      })
+      const currentKey = (v as { currentKey: string }).currentKey
+      if (grouped) {
+        await patchAppConfig({
+          connectionGroupSort: currentKey as
+            | 'name'
+            | 'count'
+            | 'upload'
+            | 'download'
+            | 'uploadSpeed'
+            | 'downloadSpeed'
+        })
+      } else {
+        await patchAppConfig({
+          connectionOrderBy: currentKey as
+            | 'time'
+            | 'upload'
+            | 'download'
+            | 'uploadSpeed'
+            | 'downloadSpeed'
+            | 'process'
+        })
+      }
     },
-    [patchAppConfig]
+    [grouped, patchAppConfig]
   )
 
   const handleDirectionToggle = useCallback(async () => {
-    await patchAppConfig({
-      connectionDirection: connectionDirection === 'asc' ? 'desc' : 'asc'
-    })
-  }, [connectionDirection, patchAppConfig])
+    if (grouped) {
+      await patchAppConfig({
+        connectionGroupDirection: connectionGroupDirection === 'asc' ? 'desc' : 'asc'
+      })
+    } else {
+      await patchAppConfig({
+        connectionDirection: connectionDirection === 'asc' ? 'desc' : 'asc'
+      })
+    }
+  }, [grouped, connectionDirection, connectionGroupDirection, patchAppConfig])
 
   const syncFilterCursor = useCallback((fallback?: number) => {
     const nextCursor = filterInputRef.current?.selectionStart ?? fallback ?? 0
@@ -1139,25 +1163,42 @@ const Connections: React.FC = () => {
             classNames={{ trigger: 'data-[hover=true]:bg-default-200' }}
             size="sm"
             className="w-34 min-w-24 shrink-0"
-            selectedKeys={new Set([connectionOrderBy])}
+            selectedKeys={new Set([grouped ? connectionGroupSort : connectionOrderBy])}
             disallowEmptySelection={true}
             onSelectionChange={handleOrderByChange}
           >
-            <SelectItem key="upload">上传量</SelectItem>
-            <SelectItem key="download">下载量</SelectItem>
-            <SelectItem key="uploadSpeed">上传速度</SelectItem>
-            <SelectItem key="downloadSpeed">下载速度</SelectItem>
-            <SelectItem key="time">时间</SelectItem>
-            <SelectItem key="process">进程名称</SelectItem>
+            {grouped ? (
+              <>
+                <SelectItem key="name">进程名称</SelectItem>
+                <SelectItem key="count">连接数</SelectItem>
+                <SelectItem key="upload">上传量</SelectItem>
+                <SelectItem key="download">下载量</SelectItem>
+                <SelectItem key="uploadSpeed">上传速度</SelectItem>
+                <SelectItem key="downloadSpeed">下载速度</SelectItem>
+              </>
+            ) : (
+              <>
+                <SelectItem key="upload">上传量</SelectItem>
+                <SelectItem key="download">下载量</SelectItem>
+                <SelectItem key="uploadSpeed">上传速度</SelectItem>
+                <SelectItem key="downloadSpeed">下载速度</SelectItem>
+                <SelectItem key="time">时间</SelectItem>
+                <SelectItem key="process">进程名称</SelectItem>
+              </>
+            )}
           </Select>
           <Button
             size="sm"
             isIconOnly
             className="bg-content2"
-            aria-label={connectionDirection === 'asc' ? '升序' : '降序'}
+            aria-label={
+              (grouped ? connectionGroupDirection : connectionDirection) === 'asc'
+                ? '升序'
+                : '降序'
+            }
             onPress={handleDirectionToggle}
           >
-            {connectionDirection === 'asc' ? (
+            {(grouped ? connectionGroupDirection : connectionDirection) === 'asc' ? (
               <HiSortAscending className="text-lg" />
             ) : (
               <HiSortDescending className="text-lg" />

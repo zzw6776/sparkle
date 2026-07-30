@@ -290,6 +290,12 @@ interface ISysProxyConfig {
   guardNotify?: boolean
 }
 
+interface OriginDNSState {
+  service: string
+  servers: string[]
+  mode: 'exec' | 'service'
+}
+
 interface IHost {
   domain: string
   value: string | string[]
@@ -361,6 +367,8 @@ interface AppConfig {
   customSubStoreUrl?: string
   diffWorkDir?: boolean
   autoSetDNSMode?: 'none' | 'exec' | 'service'
+  originDNSState?: OriginDNSState
+  /** @deprecated Legacy DNS recovery value kept for configuration migration. */
   originDNS?: string
   useWindowFrame: boolean
   proxyInTray: boolean

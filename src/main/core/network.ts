@@ -1,11 +1,14 @@
 import { execFile } from 'child_process'
 import { net } from 'electron'
+import { createConnection } from 'node:net'
 import os from 'os'
 import { promisify } from 'util'
 import { getAppConfig, getControledMihomoConfig, patchAppConfig } from '../config'
 import { setSysDns } from '../service/api'
+import { startSysDnsGuard, stopSysDnsGuard } from '../service/dns-guard'
 import { triggerSysProxy } from '../sys/sysproxy'
 import { appendAppLog } from '../utils/log'
+import { systemDNSListenHost, systemDNSListenPort } from './system-dns-config'
 
 export interface NetworkCoreController {
   shouldStartCore: (networkDownHandled: boolean) => boolean
@@ -13,11 +16,14 @@ export interface NetworkCoreController {
   stopCore: () => Promise<void>
 }
 
-let setPublicDNSTimer: NodeJS.Timeout | null = null
-let recoverDNSTimer: NodeJS.Timeout | null = null
 let networkDetectionTimer: NodeJS.Timeout | null = null
 let networkDetectionGeneration = 0
 let networkDownHandled = false
+let dnsLifecycleGeneration = 0
+let dnsLifecycleQueue: Promise<void> = Promise.resolve()
+
+const compatibilityDNSServers = ['223.5.5.5']
+const systemDNSListenerTimeout = 5000
 
 export async function getDefaultDevice(): Promise<string> {
   const execFilePromise = promisify(execFile)
@@ -42,57 +48,181 @@ async function getDefaultService(): Promise<string> {
   throw new Error('Get service failed')
 }
 
-async function getOriginDNS(): Promise<void> {
+async function getDNSForService(service: string): Promise<string[]> {
   const execFilePromise = promisify(execFile)
-  const service = await getDefaultService()
   const { stdout: dns } = await execFilePromise('networksetup', ['-getdnsservers', service])
   if (dns.startsWith("There aren't any DNS Servers set on")) {
-    await patchAppConfig({ originDNS: 'Empty' })
-  } else {
-    await patchAppConfig({ originDNS: dns.trim().replace(/\n/g, ' ') })
+    return []
   }
+  return dns
+    .trim()
+    .split(/\r?\n/)
+    .map((server) => server.trim())
+    .filter(Boolean)
 }
 
-async function setDNS(dns: string, mode: 'none' | 'exec' | 'service'): Promise<void> {
-  const service = await getDefaultService()
-  const dnsServers = dns.split(' ')
+async function setDNSForService(
+  service: string,
+  servers: string[],
+  mode: 'exec' | 'service'
+): Promise<void> {
+  const dnsServers = servers.length > 0 ? servers : ['Empty']
   if (mode === 'exec') {
     const execFilePromise = promisify(execFile)
     await execFilePromise('networksetup', ['-setdnsservers', service, ...dnsServers])
     return
   }
-  if (mode === 'service') {
-    await setSysDns(service, dnsServers)
+  await setSysDns(service, dnsServers)
+}
+
+function legacyOriginDNSServers(value: string): string[] {
+  return value === 'Empty' ? [] : value.split(' ').filter(Boolean)
+}
+
+async function migrateLegacyOriginDNS(
+  originDNS: string,
+  mode: 'none' | 'exec' | 'service'
+): Promise<OriginDNSState> {
+  const state: OriginDNSState = {
+    service: await getDefaultService(),
+    servers: legacyOriginDNSServers(originDNS),
+    mode: mode === 'service' ? 'service' : 'exec'
+  }
+  await patchAppConfig({ originDNSState: state, originDNS: undefined })
+  return state
+}
+
+async function restoreSavedDNSState(
+  state: OriginDNSState | undefined,
+  legacyOriginDNS: string | undefined,
+  mode: 'none' | 'exec' | 'service',
+  generation: number
+): Promise<void> {
+  let savedState = state
+  if (!savedState && legacyOriginDNS) {
+    savedState = await migrateLegacyOriginDNS(legacyOriginDNS, mode)
+  }
+  if (!savedState || generation !== dnsLifecycleGeneration) return
+
+  await setDNSForService(savedState.service, savedState.servers, savedState.mode)
+  if (generation === dnsLifecycleGeneration) {
+    await patchAppConfig({ originDNSState: undefined, originDNS: undefined })
+  }
+}
+
+function probeSystemDNSListener(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({
+      host: systemDNSListenHost,
+      port: systemDNSListenPort
+    })
+    let settled = false
+    const complete = (ready: boolean): void => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(ready)
+    }
+
+    socket.setTimeout(250)
+    socket.once('connect', () => complete(true))
+    socket.once('timeout', () => complete(false))
+    socket.once('error', () => complete(false))
+  })
+}
+
+async function waitForSystemDNSListener(): Promise<void> {
+  const deadline = Date.now() + systemDNSListenerTimeout
+  while (Date.now() < deadline) {
+    if (await probeSystemDNSListener()) return
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100)
+    })
+  }
+  throw new Error(`Mihomo 本地 DNS 未在 ${systemDNSListenHost}:${systemDNSListenPort} 就绪`)
+}
+
+function enqueueDNSLifecycle(
+  task: (generation: number) => Promise<void>,
+  generation: number
+): Promise<void> {
+  const next = dnsLifecycleQueue.then(
+    () => task(generation),
+    () => task(generation)
+  )
+  dnsLifecycleQueue = next.catch(() => {})
+  return next
+}
+
+async function setPublicDNSInternal(generation: number): Promise<void> {
+  if (process.platform !== 'darwin' || generation !== dnsLifecycleGeneration) return
+
+  const { originDNSState, originDNS, autoSetDNSMode = 'none' } = await getAppConfig()
+  if (autoSetDNSMode === 'none' || generation !== dnsLifecycleGeneration) return
+
+  if (autoSetDNSMode === 'service') {
+    await waitForSystemDNSListener()
+    if (generation !== dnsLifecycleGeneration) return
+
+    await startSysDnsGuard([systemDNSListenHost], systemDNSListenPort)
+    if (generation !== dnsLifecycleGeneration) return
+
+    try {
+      await restoreSavedDNSState(originDNSState, originDNS, autoSetDNSMode, generation)
+    } catch (error) {
+      await appendAppLog(`[DNS]: restore legacy network-service DNS failed, ${error}\n`)
+    }
     return
   }
-}
 
-export async function setPublicDNS(): Promise<void> {
-  if (process.platform !== 'darwin') return
-  if (net.isOnline()) {
-    const { originDNS, autoSetDNSMode = 'none' } = await getAppConfig()
-    if (!originDNS) {
-      await getOriginDNS()
-      await setDNS('223.5.5.5', autoSetDNSMode)
+  if (generation !== dnsLifecycleGeneration || originDNSState) return
+
+  if (originDNS) {
+    try {
+      await migrateLegacyOriginDNS(originDNS, autoSetDNSMode)
+    } catch (error) {
+      await appendAppLog(`[DNS]: migrate legacy DNS recovery state failed, ${error}\n`)
     }
-  } else {
-    if (setPublicDNSTimer) clearTimeout(setPublicDNSTimer)
-    setPublicDNSTimer = setTimeout(() => setPublicDNS(), 5000)
+    return
+  }
+
+  try {
+    const service = await getDefaultService()
+    const state: OriginDNSState = {
+      service,
+      servers: await getDNSForService(service),
+      mode: autoSetDNSMode
+    }
+    await patchAppConfig({ originDNSState: state, originDNS: undefined })
+    if (generation !== dnsLifecycleGeneration) return
+    await setDNSForService(service, compatibilityDNSServers, autoSetDNSMode)
+  } catch (error) {
+    await appendAppLog(`[DNS]: no active network service for compatibility DNS, ${error}\n`)
   }
 }
 
-export async function recoverDNS(): Promise<void> {
+async function recoverDNSInternal(generation: number): Promise<void> {
   if (process.platform !== 'darwin') return
-  if (net.isOnline()) {
-    const { originDNS, autoSetDNSMode = 'none' } = await getAppConfig()
-    if (originDNS) {
-      await setDNS(originDNS, autoSetDNSMode)
-      await patchAppConfig({ originDNS: undefined })
-    }
-  } else {
-    if (recoverDNSTimer) clearTimeout(recoverDNSTimer)
-    recoverDNSTimer = setTimeout(() => recoverDNS(), 5000)
+
+  await stopSysDnsGuard()
+  if (generation !== dnsLifecycleGeneration) return
+
+  const { originDNSState, originDNS, autoSetDNSMode = 'none' } = await getAppConfig()
+  try {
+    await restoreSavedDNSState(originDNSState, originDNS, autoSetDNSMode, generation)
+  } catch (error) {
+    await appendAppLog(`[DNS]: recover network-service DNS failed, ${error}\n`)
   }
+}
+
+export function setPublicDNS(): Promise<void> {
+  const generation = ++dnsLifecycleGeneration
+  return enqueueDNSLifecycle(setPublicDNSInternal, generation)
+}
+
+export function recoverDNS(): Promise<void> {
+  const generation = ++dnsLifecycleGeneration
+  return enqueueDNSLifecycle(recoverDNSInternal, generation)
 }
 
 export async function startNetworkDetectionController(
@@ -115,9 +245,18 @@ export async function startNetworkDetectionController(
     if (detecting || generation !== networkDetectionGeneration) return
     detecting = true
     try {
-      const { onlyActiveDevice = false, sysProxy = { enable: false } } = await getAppConfig()
+      const {
+        onlyActiveDevice = false,
+        sysProxy = { enable: false },
+        autoSetDNSMode = 'none'
+      } = await getAppConfig()
       if (generation !== networkDetectionGeneration) return
-      if (isAnyNetworkInterfaceUp(extendedBypass) && net.isOnline()) {
+      const canRunWithoutSystemOnline =
+        process.platform === 'darwin' && autoSetDNSMode === 'service'
+      if (
+        isAnyNetworkInterfaceUp(extendedBypass) &&
+        (net.isOnline() || canRunWithoutSystemOnline)
+      ) {
         if (controller.shouldStartCore(networkDownHandled)) {
           await controller.startCore()
           if (generation !== networkDetectionGeneration) return

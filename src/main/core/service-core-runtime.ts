@@ -27,6 +27,7 @@ import {
 import { shouldSkipServiceUnavailableFallback } from '../service/fallback'
 import { appendAppLog, setMihomoLogSource } from '../utils/log'
 import { showNotification } from '../utils/notification'
+import { recoverDNS } from './network'
 
 interface ServiceCoreRuntimeOptions {
   notifyCoreLog: (source: ServiceCoreEvent) => void
@@ -263,6 +264,9 @@ export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
       case 'failed':
       case 'restart_failed':
         clearStreams()
+        await recoverDNS().catch((error) =>
+          appendAppLog(`[Manager]: recover DNS after service core stopped failed, ${error}\n`)
+        )
         setMihomoLogSource('out')
         mainWindow?.webContents.send('core-stopped', event)
         if (event.type === 'failed' || event.type === 'restart_failed') {
@@ -276,6 +280,9 @@ export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
         serviceCoreState.autoResumePaused = true
         serviceCoreState.managed = false
         serviceCoreState.streamsActive = false
+        await recoverDNS().catch((error) =>
+          appendAppLog(`[Manager]: recover DNS after service core stopped failed, ${error}\n`)
+        )
         mainWindow?.webContents.send('core-stopped', event)
         break
     }

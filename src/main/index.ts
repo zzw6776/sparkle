@@ -41,6 +41,8 @@ let initialWindowDisplayPromiseResolve: (() => void) | null = null
 const initialWindowDisplayPromise = new Promise<void>((resolve) => {
   initialWindowDisplayPromiseResolve = resolve
 })
+const rendererReloadMaxRetries = 5
+const rendererReloadBaseDelay = 500
 
 async function scheduleLightweightMode(): Promise<void> {
   const {
@@ -264,6 +266,38 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
       }
     })
     windowStateManager.attach(mainWindow)
+    const mainWebContents = mainWindow.webContents
+    let rendererReloadTimer: ReturnType<typeof setTimeout> | null = null
+    let rendererReloadAttempts = 0
+
+    const clearRendererReload = (): void => {
+      if (rendererReloadTimer) {
+        clearTimeout(rendererReloadTimer)
+        rendererReloadTimer = null
+      }
+    }
+
+    const scheduleRendererReload = (reason: string): void => {
+      if (mainWebContents.isDestroyed() || rendererReloadTimer) return
+      if (rendererReloadAttempts >= rendererReloadMaxRetries) {
+        void appendAppLog(
+          `[App]: renderer reload stopped after ${rendererReloadAttempts} attempts, ${reason}\n`
+        )
+        return
+      }
+
+      const delay = Math.min(
+        rendererReloadBaseDelay * 2 ** rendererReloadAttempts,
+        4000
+      )
+      rendererReloadAttempts++
+      rendererReloadTimer = setTimeout(() => {
+        rendererReloadTimer = null
+        if (mainWebContents.isDestroyed() || mainWebContents.isLoadingMainFrame()) return
+        mainWebContents.reload()
+      }, delay)
+    }
+
     mainWindow.on('ready-to-show', async () => {
       const { silentStart = false } = await getAppConfig()
       if (is.dev || !silentStart) {
@@ -280,11 +314,30 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
         initialWindowDisplayPromiseResolve = null
       }
     })
-    mainWindow.webContents.on('did-fail-load', () => {
-      mainWindow?.webContents.reload()
+    mainWebContents.on('did-finish-load', () => {
+      clearRendererReload()
+      rendererReloadAttempts = 0
     })
 
-    mainWindow.webContents.once('destroyed', () => {
+    mainWebContents.on(
+      'did-fail-load',
+      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (!isMainFrame || errorCode === -3) return
+        scheduleRendererReload(
+          `did-fail-load code=${errorCode} description=${errorDescription} url=${validatedURL}`
+        )
+      }
+    )
+
+    mainWebContents.on('render-process-gone', (_event, details) => {
+      if (details.reason === 'clean-exit') return
+      scheduleRendererReload(
+        `render-process-gone reason=${details.reason} exitCode=${details.exitCode}`
+      )
+    })
+
+    mainWebContents.once('destroyed', () => {
+      clearRendererReload()
       cancelMihomoProxySpeedTest()
       cancelMihomoCodexTest()
       cancelMihomoCodexActualTest()

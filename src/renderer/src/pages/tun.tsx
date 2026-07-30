@@ -110,18 +110,27 @@ const Tun: React.FC = () => {
             </SettingItem>
           )}
           {platform === 'darwin' && (
-            <SettingItem compatKey="legacy" title="自动设置系统 DNS" divider>
+            <SettingItem compatKey="legacy" title="TUN DNS 接管" divider>
               <Tabs
                 size="sm"
                 color="primary"
+                isDisabled={loading}
                 selectedKey={autoSetDNSMode}
                 onSelectionChange={async (key: Key) => {
-                  await patchAppConfig({ autoSetDNSMode: key as 'none' | 'exec' | 'service' })
+                  setLoading(true)
+                  try {
+                    await patchAppConfig({
+                      autoSetDNSMode: key as 'none' | 'exec' | 'service'
+                    })
+                    await restartCore()
+                  } finally {
+                    setLoading(false)
+                  }
                 }}
               >
-                <Tab key="none" title="不自动设置" />
-                <Tab key="exec" title="执行命令" />
-                <Tab key="service" title="服务模式" />
+                <Tab key="none" title="关闭" />
+                <Tab key="exec" title="兼容模式" />
+                <Tab key="service" title="增强模式" />
               </Tabs>
             </SettingItem>
           )}

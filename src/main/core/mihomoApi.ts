@@ -1,4 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
+import net from 'net'
+import tls from 'tls'
 import { getAppConfig, getControledMihomoConfig } from '../config'
 import { mainWindow } from '..'
 import WebSocket from 'ws'
@@ -9,6 +11,7 @@ import { floatingWindow } from '../resolve/floatingWindow'
 import { mihomoIpcPath, serviceIpcPath } from '../utils/dirs'
 import { publishMihomoLog } from '../utils/log'
 import { createSignedServiceAxios, getServiceAuthHeaders } from '../service/api'
+import { safeSendToWindow } from '../utils/webContents'
 
 let axiosIns: AxiosInstance = null!
 let mihomoTrafficWs: WebSocket | null = null
@@ -134,6 +137,201 @@ export const mihomoCloseConnections = async (name?: string): Promise<void> => {
 export const mihomoRules = async (): Promise<ControllerRules> => {
   const instance = await getAxios()
   return await instance.get('/rules')
+}
+
+const RULE_MATCH_TIMEOUT = 8000
+const RULE_MATCH_CONNECTION_INTERVAL = 50
+
+function parseRuleMatchUrl(input: string): URL {
+  const trimmed = input.trim()
+  if (!trimmed) throw new Error('请输入要测试的网址')
+
+  let url: URL
+  try {
+    url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+  } catch {
+    throw new Error('网址格式不正确')
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('仅支持 HTTP 或 HTTPS 网址')
+  }
+  if (!url.hostname) throw new Error('网址缺少主机名')
+
+  return url
+}
+
+function formatConnectAuthority(host: string, port: number): string {
+  return `${net.isIP(host) === 6 ? `[${host}]` : host}:${port}`
+}
+
+async function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
+  if (ws.readyState === WebSocket.OPEN) return
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error('连接内核超时'))
+    }, RULE_MATCH_TIMEOUT)
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      ws.off('open', handleOpen)
+      ws.off('error', handleError)
+    }
+    const handleOpen = (): void => {
+      cleanup()
+      resolve()
+    }
+    const handleError = (): void => {
+      cleanup()
+      reject(new Error('无法连接内核'))
+    }
+
+    ws.once('open', handleOpen)
+    ws.once('error', handleError)
+  })
+}
+
+async function observeRuleMatch(
+  ws: WebSocket,
+  url: URL,
+  proxyPort: number
+): Promise<ControllerConnectionDetail> {
+  const host = url.hostname
+  const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80))
+  const authority = formatConnectAuthority(host, port)
+
+  return await new Promise<ControllerConnectionDetail>((resolve, reject) => {
+    let sourcePort = ''
+    let settled = false
+    let proxyResponse = ''
+    let tunnelSocket: net.Socket | tls.TLSSocket | null = null
+    const socket = net.createConnection({ host: '127.0.0.1', port: proxyPort })
+
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      ws.removeAllListeners()
+      closeWebSocket(ws)
+      tunnelSocket?.destroy()
+      if (tunnelSocket !== socket) socket.destroy()
+    }
+    const finish = (
+      connection?: ControllerConnectionDetail,
+      error?: Error
+    ): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (connection) resolve(connection)
+      else reject(error || new Error('未获取到规则匹配结果'))
+    }
+    const timer = setTimeout(
+      () => finish(undefined, new Error('规则匹配超时，请确认目标网址可以连接')),
+      RULE_MATCH_TIMEOUT
+    )
+
+    ws.on('message', (data) => {
+      if (!sourcePort) return
+      try {
+        const info = JSON.parse(data.toString()) as ControllerConnections
+        const connection = info.connections?.find(
+          (item) =>
+            item.metadata.sourcePort === sourcePort &&
+            (item.metadata.host === host ||
+              item.metadata.sniffHost === host ||
+              item.metadata.destinationPort === String(port))
+        )
+        if (connection) finish(connection)
+      } catch {
+        // Ignore an incomplete controller frame and keep waiting for the next one.
+      }
+    })
+    ws.on('error', () => finish(undefined, new Error('读取内核连接信息失败')))
+
+    socket.setNoDelay(true)
+    socket.once('connect', () => {
+      sourcePort = String(socket.localPort || '')
+      socket.write(
+        `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\nProxy-Connection: keep-alive\r\n\r\n`
+      )
+    })
+    socket.on('data', (chunk) => {
+      if (tunnelSocket) return
+      proxyResponse += chunk.toString('latin1')
+      const headerEnd = proxyResponse.indexOf('\r\n\r\n')
+      if (headerEnd < 0) return
+
+      const status = Number(proxyResponse.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i)?.[1])
+      if (status !== 200) {
+        finish(
+          undefined,
+          new Error(status === 407 ? '本机代理需要认证，无法测试规则' : '本机代理拒绝了测试连接')
+        )
+        return
+      }
+
+      if (url.protocol === 'https:') {
+        const secureSocket = tls.connect({
+          socket,
+          servername: net.isIP(host) ? undefined : host,
+          rejectUnauthorized: false
+        })
+        tunnelSocket = secureSocket
+        secureSocket.on('error', () => {
+          // The rule is resolved before the remote TLS handshake completes.
+        })
+      } else {
+        tunnelSocket = socket
+        const path = `${url.pathname || '/'}${url.search}`
+        socket.write(
+          `HEAD ${path} HTTP/1.1\r\nHost: ${url.host}\r\nConnection: keep-alive\r\n\r\n`
+        )
+      }
+    })
+    socket.once('error', () => finish(undefined, new Error('无法连接本机代理端口')))
+  })
+}
+
+export const mihomoMatchRule = async (input: string): Promise<ControllerRuleMatchResult> => {
+  const url = parseRuleMatchUrl(input)
+  const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80))
+  const [config, rulesBefore] = await Promise.all([mihomoConfig(), mihomoRules()])
+  const proxyPort = config['mixed-port'] || config.port
+  if (!proxyPort) throw new Error('请先启用混合端口或 HTTP 代理端口')
+
+  const ws = await mihomoWs(`/connections?interval=${RULE_MATCH_CONNECTION_INTERVAL}`)
+  try {
+    await waitForWebSocketOpen(ws)
+  } catch (error) {
+    closeWebSocket(ws)
+    throw error
+  }
+
+  const connection = await observeRuleMatch(ws, url, proxyPort)
+  const rulesAfter = await mihomoRules().catch(() => rulesBefore)
+  const beforeByIndex = new Map(rulesBefore.rules.map((rule) => [rule.index, rule]))
+  const candidates = rulesAfter.rules.filter(
+    (rule) =>
+      !rule.extra.disabled &&
+      rule.type === connection.rule &&
+      rule.payload === connection.rulePayload
+  )
+  const matchedRule =
+    candidates.find(
+      (rule) => rule.extra.hitCount > (beforeByIndex.get(rule.index)?.extra.hitCount || 0)
+    ) || candidates[0]
+
+  return {
+    url: url.toString(),
+    host: url.hostname,
+    port,
+    ruleIndex: matchedRule?.index,
+    rule: connection.rule,
+    rulePayload: connection.rulePayload,
+    ruleProxy: matchedRule?.proxy || '',
+    chains: connection.chains || [],
+    destinationIP: connection.metadata.destinationIP || ''
+  }
 }
 
 export const mihomoProxies = async (): Promise<ControllerProxies> => {
@@ -354,7 +552,7 @@ const mihomoTraffic = async (): Promise<void> => {
     const json = JSON.parse(data) as ControllerTraffic
     trafficRetry = 10
     try {
-      mainWindow?.webContents.send('mihomoTraffic', json)
+      safeSendToWindow(mainWindow, 'mihomoTraffic', json)
       if (process.platform !== 'linux') {
         tray?.setToolTip(
           '↑' +
@@ -363,9 +561,9 @@ const mihomoTraffic = async (): Promise<void> => {
             `${calcTraffic(json.down)}/s`.padStart(9)
         )
       }
-      floatingWindow?.webContents.send('mihomoTraffic', json)
+      safeSendToWindow(floatingWindow, 'mihomoTraffic', json)
       if (customTrayWindow && !customTrayWindow.isDestroyed() && customTrayWindow.isVisible()) {
-        customTrayWindow.webContents.send('mihomoTraffic', json)
+        safeSendToWindow(customTrayWindow, 'mihomoTraffic', json)
       }
     } catch {
       // ignore
@@ -419,7 +617,7 @@ const mihomoMemory = async (): Promise<void> => {
     const data = e.data as string
     memoryRetry = 10
     try {
-      mainWindow?.webContents.send('mihomoMemory', JSON.parse(data) as ControllerMemory)
+      safeSendToWindow(mainWindow, 'mihomoMemory', JSON.parse(data) as ControllerMemory)
     } catch {
       // ignore
     }
@@ -540,7 +738,11 @@ const mihomoConnections = async (): Promise<void> => {
     const data = e.data as string
     connectionsRetry = 10
     try {
-      mainWindow?.webContents.send('mihomoConnections', JSON.parse(data) as ControllerConnections)
+      safeSendToWindow(
+        mainWindow,
+        'mihomoConnections',
+        JSON.parse(data) as ControllerConnections
+      )
     } catch {
       // ignore
     }

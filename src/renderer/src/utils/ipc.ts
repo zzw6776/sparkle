@@ -33,6 +33,10 @@ export async function mihomoRules(): Promise<ControllerRules> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoRules'))
 }
 
+export async function mihomoMatchRule(url: string): Promise<ControllerRuleMatchResult> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoMatchRule', url))
+}
+
 export async function mihomoProxies(): Promise<ControllerProxies> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('mihomoProxies'))
 }

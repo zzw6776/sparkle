@@ -1,5 +1,5 @@
 import WebSocket from 'ws'
-import { createServiceWebSocket } from './api'
+import { createServiceWebSocket, reportServiceUnavailable } from './api'
 import { appendAppLog } from '../utils/log'
 
 const dnsGuardReconnectDelay = 1000
@@ -40,12 +40,16 @@ async function connectDNSGuard(generation: number): Promise<void> {
   })
   ws.on('error', (error) => {
     appendAppLog(`[DNS]: service guard websocket error, ${error}\n`).catch(() => {})
+    if (!dnsGuardManualClose && generation === dnsGuardGeneration) {
+      reportServiceUnavailable(error)
+    }
   })
   ws.on('close', () => {
     if (dnsGuardWs === ws) {
       dnsGuardWs = null
     }
     if (!dnsGuardManualClose && generation === dnsGuardGeneration) {
+      reportServiceUnavailable(new Error('DNS guard websocket disconnected'))
       scheduleDNSGuardReconnect(generation)
     }
   })
@@ -62,6 +66,7 @@ function scheduleDNSGuardReconnect(generation: number): void {
     dnsGuardReconnectTimer = null
     connectDNSGuard(generation).catch((error) => {
       appendAppLog(`[DNS]: reconnect service guard failed, ${error}\n`).catch(() => {})
+      reportServiceUnavailable(error)
       scheduleDNSGuardReconnect(generation)
     })
   }, dnsGuardReconnectDelay)
@@ -166,6 +171,7 @@ export async function startSysDnsGuard(servers: string[], port = 53): Promise<vo
   try {
     await connectDNSGuard(generation)
   } catch (error) {
+    reportServiceUnavailable(error)
     scheduleDNSGuardReconnect(generation)
     throw error
   }

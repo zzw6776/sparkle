@@ -79,7 +79,7 @@ const serviceCoreRuntime = createServiceCoreRuntime({
   resetDirectCoreRetry: () => {
     directCoreState.retry = 10
   },
-  startCore: (detached) => startCore(detached)
+  startCore: (detached, shouldContinue) => startCore(detached, shouldContinue)
 })
 
 type CoreLogNotification = AppNotificationPayload & {
@@ -220,6 +220,7 @@ type ServiceCoreConnectionProbe = {
 }
 
 async function startMihomoApiStreams(): Promise<void> {
+  await serviceCoreRuntime.waitForStreamsIdle()
   await startMihomoTraffic()
   await startMihomoConnections()
   await startMihomoLogs()
@@ -345,7 +346,11 @@ async function getServiceStatusAfterConnectionError(): Promise<
   }
 }
 
-export async function startCore(detached = false): Promise<Promise<void>[]> {
+export async function startCore(
+  detached = false,
+  shouldContinue?: () => boolean
+): Promise<Promise<void>[]> {
+  const canContinue = (): boolean => !shouldContinue || shouldContinue()
   const {
     core = 'mihomo',
     corePermissionMode = 'elevated',
@@ -362,6 +367,7 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     safePaths = [],
     testChannelCapacity
   } = await getAppConfig()
+  if (!canContinue()) return []
   const controlledMihomoConfig = await getControledMihomoConfig()
   const { 'log-level': logLevel, tun } = controlledMihomoConfig
   const { current } = await getProfileConfig()
@@ -373,8 +379,9 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     corePath = mihomoCorePath(core)
   } catch (error) {
     if (core === 'system') {
+      if (!canContinue()) return []
       await patchAppConfig({ core: 'mihomo' })
-      return startCore(detached)
+      return startCore(detached, shouldContinue)
     }
     throw error
   }
@@ -387,6 +394,7 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     } catch (error) {
       if (isServiceUnavailableError(error)) {
         const probe = await waitForServiceCoreConnection(error)
+        if (!canContinue()) return []
         if (!probe.reachable) {
           return serviceCoreRuntime.fallbackToElevatedCore(detached, probe.error)
         }
@@ -416,7 +424,9 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
   await checkProfile()
 
   if (!serviceCoreRunning) {
-    await stopCore()
+    if (!canContinue()) return []
+    await stopCore(false, shouldContinue !== undefined)
+    if (!canContinue()) return []
   }
   setMihomoLogSource('out')
   if (tun?.enable && autoSetDNSMode === 'exec') {
@@ -468,23 +478,30 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     }
 
     await appendAppLog(`[Manager]: Core permission mode: service\n`)
+    if (!canContinue()) return []
     serviceCoreRuntime.resumeAutoResume()
     serviceCoreRuntime.ensureEventHandler()
     serviceCoreRuntime.beginStartup()
     try {
       await serviceCoreRuntime.startEventStream()
+      if (!canContinue()) return []
       if (!serviceCoreRunning) {
+        if (!canContinue()) return []
         await startServiceCore(serviceProfile)
       }
       serviceCoreRuntime.setManaged(true)
     } catch (error) {
       if (isServiceUnavailableError(error)) {
+        if (!canContinue()) return []
         const probe = await waitForServiceCoreConnection(error)
+        if (!canContinue()) return []
         if (!probe.reachable) {
           return serviceCoreRuntime.fallbackToElevatedCore(detached, probe.error)
         }
         await serviceCoreRuntime.startEventStream()
+        if (!canContinue()) return []
         if (!probe.running) {
+          if (!canContinue()) return []
           await startServiceCore(serviceProfile)
         }
         serviceCoreRuntime.setManaged(true)
@@ -499,11 +516,13 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
     return [completeCoreInitialization(logLevel, enableServiceDNS)]
   }
 
+  if (!canContinue()) return []
   const providerTracker = createProviderInitializationTracker(await getRuntimeConfig())
   const stdout = createLogWritable('core', 'info')
   const stderr = createLogWritable('core', 'error')
   directCoreState.logLineBuffer = ''
 
+  if (!canContinue()) return []
   const child = spawn(corePath, spawnArgs, {
     detached: detached,
     stdio: detached ? 'ignore' : undefined,
@@ -642,8 +661,10 @@ export async function startCore(detached = false): Promise<Promise<void>[]> {
   return startupPromises.map((promise) => promise.catch(recoverDNSAfterCoreStartupFailure))
 }
 
-export async function stopCore(force = false): Promise<void> {
-  serviceCoreRuntime.pauseAutoResume()
+export async function stopCore(force = false, preserveServiceRuntime = false): Promise<void> {
+  if (!preserveServiceRuntime) {
+    serviceCoreRuntime.pauseAutoResume()
+  }
 
   try {
     if (!force) {
@@ -664,7 +685,9 @@ export async function stopCore(force = false): Promise<void> {
       await appendAppLog(`[Manager]: stop service core failed, ${error}\n`)
     } finally {
       serviceCoreRuntime.setManaged(false)
-      serviceCoreRuntime.stopEventHandlers()
+      if (!preserveServiceRuntime) {
+        serviceCoreRuntime.stopEventHandlers()
+      }
     }
   }
 

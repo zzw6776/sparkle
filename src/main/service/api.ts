@@ -202,6 +202,10 @@ function scheduleServiceUnavailableFallback(reason: unknown): void {
   }, serviceUnavailableFallbackDelay)
 }
 
+export function reportServiceUnavailable(reason: unknown): void {
+  scheduleServiceUnavailableFallback(reason)
+}
+
 async function runServiceUnavailableFallback(reason: unknown): Promise<void> {
   if (shouldSkipServiceUnavailableFallback()) return
   if (await isServiceUsable()) return
@@ -453,6 +457,10 @@ let serviceCoreEventsManualClose = false
 let serviceCoreEventsReconnectTimer: NodeJS.Timeout | null = null
 const serviceCoreEventHandlers = new Set<ServiceCoreEventHandler>()
 const serviceCoreEventStreamHandlers = new Set<ServiceCoreEventStreamHandler>()
+let serviceCoreEventDispatchQueue: Promise<void> = Promise.resolve()
+let serviceCoreEventConnectionSequence = 0
+let serviceCoreEventActiveConnection = 0
+let serviceCoreEventPendingConnected = 0
 
 let serviceSysproxyEventsWs: WebSocket | null = null
 let serviceSysproxyEventsManualClose = true
@@ -516,14 +524,17 @@ export async function startServiceCoreEventStream(): Promise<void> {
     return
   }
 
+  const connectionId = ++serviceCoreEventConnectionSequence
+  serviceCoreEventActiveConnection = connectionId
+  serviceCoreEventPendingConnected = 0
   serviceCoreEventsWs = ws
   ws.on('open', () => {
-    dispatchServiceCoreEventStreamState('connected').catch((error) => {
+    dispatchServiceCoreEventStreamState('connected', connectionId).catch((error) => {
       appendAppLog(`[Service]: handle core event stream state failed, ${error}\n`).catch(() => {})
     })
   })
   ws.on('message', (data) => {
-    dispatchServiceCoreEvent(data).catch((error) => {
+    dispatchServiceCoreEvent(data, connectionId).catch((error) => {
       appendAppLog(`[Service]: handle core event failed, ${error}\n`).catch(() => {})
     })
   })
@@ -531,7 +542,7 @@ export async function startServiceCoreEventStream(): Promise<void> {
     if (serviceCoreEventsWs === ws) {
       serviceCoreEventsWs = null
     }
-    dispatchServiceCoreEventStreamState('disconnected').catch((error) => {
+    dispatchServiceCoreEventStreamState('disconnected', connectionId).catch((error) => {
       appendAppLog(`[Service]: handle core event stream state failed, ${error}\n`).catch(() => {})
     })
     if (!serviceCoreEventsManualClose) {
@@ -551,6 +562,8 @@ export async function startServiceCoreEventStream(): Promise<void> {
 
 export function stopServiceCoreEventStream(): void {
   serviceCoreEventsManualClose = true
+  serviceCoreEventActiveConnection = 0
+  serviceCoreEventPendingConnected = 0
   if (serviceCoreEventsReconnectTimer) {
     clearTimeout(serviceCoreEventsReconnectTimer)
     serviceCoreEventsReconnectTimer = null
@@ -677,12 +690,65 @@ async function waitForServiceSysproxyEventsSocket(ws: WebSocket): Promise<void> 
   })
 }
 
-async function dispatchServiceCoreEvent(data: WebSocket.RawData): Promise<void> {
+function enqueueServiceCoreEventDispatch(task: () => Promise<void>): Promise<void> {
+  const dispatch = serviceCoreEventDispatchQueue.then(task)
+  serviceCoreEventDispatchQueue = dispatch.catch(() => {})
+  return dispatch
+}
+
+async function dispatchServiceCoreEvent(
+  data: WebSocket.RawData,
+  connectionId: number
+): Promise<void> {
+  return enqueueServiceCoreEventDispatch(async () => {
+    if (connectionId !== serviceCoreEventActiveConnection) return
+    await dispatchServiceCoreEventNow(data, connectionId)
+  })
+}
+
+async function dispatchServiceCoreEventNow(
+  data: WebSocket.RawData,
+  connectionId: number
+): Promise<void> {
+  if (connectionId !== serviceCoreEventActiveConnection) return
   const raw = Buffer.isBuffer(data) ? data.toString('utf8') : data.toString()
   const event = JSON.parse(raw) as ServiceCoreEvent
   for (const handler of serviceCoreEventHandlers) {
     await Promise.resolve(handler(event)).catch((error) => {
       appendAppLog(`[Service]: core event handler failed, ${error}\n`).catch(() => {})
+    })
+  }
+
+  if (serviceCoreEventPendingConnected === connectionId) {
+    serviceCoreEventPendingConnected = 0
+    await dispatchServiceCoreEventStreamStateNow('connected')
+  }
+}
+
+async function dispatchServiceCoreEventStreamState(
+  state: ServiceCoreEventStreamState,
+  connectionId: number
+): Promise<void> {
+  return enqueueServiceCoreEventDispatch(async () => {
+    if (connectionId !== serviceCoreEventActiveConnection) return
+    if (state === 'connected') {
+      serviceCoreEventPendingConnected = connectionId
+      return
+    }
+
+    if (serviceCoreEventPendingConnected === connectionId) {
+      serviceCoreEventPendingConnected = 0
+    }
+    await dispatchServiceCoreEventStreamStateNow(state)
+  })
+}
+
+async function dispatchServiceCoreEventStreamStateNow(
+  state: ServiceCoreEventStreamState
+): Promise<void> {
+  for (const handler of serviceCoreEventStreamHandlers) {
+    await Promise.resolve(handler(state)).catch((error) => {
+      appendAppLog(`[Service]: core event stream state handler failed, ${error}\n`).catch(() => {})
     })
   }
 }
@@ -693,16 +759,6 @@ async function dispatchServiceSysproxyEvent(data: WebSocket.RawData): Promise<vo
   for (const handler of serviceSysproxyEventHandlers) {
     await Promise.resolve(handler(event)).catch((error) => {
       appendAppLog(`[Service]: sysproxy event handler failed, ${error}\n`).catch(() => {})
-    })
-  }
-}
-
-async function dispatchServiceCoreEventStreamState(
-  state: ServiceCoreEventStreamState
-): Promise<void> {
-  for (const handler of serviceCoreEventStreamHandlers) {
-    await Promise.resolve(handler(state)).catch((error) => {
-      appendAppLog(`[Service]: core event stream state handler failed, ${error}\n`).catch(() => {})
     })
   }
 }

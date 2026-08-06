@@ -22,6 +22,7 @@
     "dev": "node scripts/dev.ts",
     "dev:app": "node scripts/dev.ts",
     "dev:electron": "pnpm run ensure:electron && electron-vite dev -- --user-data-dir=.sparkle-dev",
+    "sync:production-data": "tsx scripts/sync-production-data.ts",
     "postinstall": "pnpm run ensure:electron && electron-builder install-app-deps",
     "build:win": "electron-vite build && electron-builder --publish never --win",
     "build:mac": "electron-vite build && electron-builder --publish never --mac",

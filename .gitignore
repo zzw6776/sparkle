@@ -6,6 +6,8 @@ dist
 dist-*
 out
 .sparkle-dev
+.sparkle-dev.before-production-sync-*
+.sparkle-dev.failed-production-sync-*
 .DS_Store
 *.log*
 .idea

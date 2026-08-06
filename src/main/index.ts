@@ -26,9 +26,8 @@ import { initAppQuitLifecycle } from './resolve/appLifecycle'
 import { showNotification } from './utils/notification'
 import { appendAppLog } from './utils/log'
 import { cancelMihomoProxySpeedTest } from './core/speedTest'
-import { cancelMihomoCodexTest } from './core/codexTest'
-import { cancelMihomoCodexActualTest } from './core/codexActualTest'
 import { cancelMihomoProcessTest } from './core/processTest'
+import { hasActiveCodexTest, stopAllCodexTests } from './core/codex-test-manager'
 
 export { setNotQuitDialog } from './resolve/appLifecycle'
 
@@ -58,6 +57,7 @@ async function scheduleLightweightMode(): Promise<void> {
   }
 
   const enterLightweightMode = async (): Promise<void> => {
+    if (hasActiveCodexTest()) return
     if (autoLightweightMode === 'core') {
       await quitWithoutCore()
     } else if (autoLightweightMode === 'tray') {
@@ -339,8 +339,6 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
     mainWebContents.once('destroyed', () => {
       clearRendererReload()
       cancelMihomoProxySpeedTest()
-      cancelMihomoCodexTest()
-      cancelMihomoCodexActualTest()
       cancelMihomoProcessTest()
     })
 
@@ -361,6 +359,7 @@ export async function createWindow(appConfig?: AppConfig): Promise<void> {
       stopNetworkDetection()
       disableSysProxySync(true)
       await triggerSysProxy(false, false, true)
+      await stopAllCodexTests()
       await stopCore()
     })
 

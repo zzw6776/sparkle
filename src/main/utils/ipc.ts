@@ -145,13 +145,16 @@ import {
   mihomoGeneralSpeedTest,
   mihomoProxySpeedTest
 } from '../core/speedTest'
-import { cancelMihomoCodexTest, mihomoCodexTest } from '../core/codexTest'
 import {
-  cancelMihomoCodexActualTest,
   invalidateCodexActualTestRuntimeCache,
-  listCodexActualTestModels,
-  mihomoCodexActualTest
+  listCodexActualTestModels
 } from '../core/codexActualTest'
+import {
+  getCodexTestSnapshot,
+  startCodexActualTest,
+  startCodexTest,
+  stopCodexTest
+} from '../core/codex-test-manager'
 import {
   cancelCodexRuntimeInstall,
   getCodexRuntimeStatus,
@@ -288,19 +291,18 @@ export function registerIpcMainHandlers(): void {
     )
   )
   ipcMain.handle('cancelMihomoProxySpeedTest', () => cancelMihomoProxySpeedTest())
-  ipcMain.handle('mihomoCodexTest', (event, proxies, rounds, concurrency) =>
-    ipcErrorWrapper(mihomoCodexTest)(
-      proxies,
-      rounds,
-      concurrency,
-      (progress: CodexTestProgress) => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send('mihomoCodexTestProgress', progress)
-        }
-      }
-    )
+  ipcMain.handle('startCodexTest', (_event, proxies, rounds, concurrency, groupName) =>
+    ipcErrorWrapper(startCodexTest)(proxies, rounds, concurrency, groupName)
   )
-  ipcMain.handle('cancelMihomoCodexTest', () => cancelMihomoCodexTest())
+  ipcMain.handle(
+    'startCodexActualTest',
+    (_event, proxies, rounds, concurrency, groupName, options) =>
+      ipcErrorWrapper(startCodexActualTest)(proxies, rounds, concurrency, groupName, options)
+  )
+  ipcMain.handle('getCodexTestSnapshot', (_event, mode) =>
+    ipcErrorWrapper(getCodexTestSnapshot)(mode)
+  )
+  ipcMain.handle('stopCodexTest', (_event, mode) => ipcErrorWrapper(stopCodexTest)(mode))
   ipcMain.handle('getCodexRuntimeStatus', () => ipcErrorWrapper(getCodexRuntimeStatus)())
   ipcMain.handle('applyCodexRuntimePreference', () =>
     ipcErrorWrapper(async () => {
@@ -320,20 +322,6 @@ export function registerIpcMainHandlers(): void {
   )
   ipcMain.handle('cancelCodexRuntimeInstall', () => cancelCodexRuntimeInstall())
   ipcMain.handle('listCodexActualTestModels', () => ipcErrorWrapper(listCodexActualTestModels)())
-  ipcMain.handle('mihomoCodexActualTest', (event, proxies, rounds, concurrency, options) =>
-    ipcErrorWrapper(mihomoCodexActualTest)(
-      proxies,
-      rounds,
-      concurrency,
-      options,
-      (progress: CodexActualTestProgress) => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send('mihomoCodexActualTestProgress', progress)
-        }
-      }
-    )
-  )
-  ipcMain.handle('cancelMihomoCodexActualTest', () => cancelMihomoCodexActualTest())
   ipcMain.handle('mihomoProcessTest', (event, proxies, targets, rounds, concurrency) =>
     ipcErrorWrapper(mihomoProcessTest)(
       proxies,

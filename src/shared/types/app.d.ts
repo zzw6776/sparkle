@@ -220,6 +220,30 @@ interface CodexActualTestLogEntry {
   round?: number
 }
 
+type CodexTestMode = 'link' | 'actual'
+type CodexTestRunStatus = 'running' | 'completed' | 'stopped' | 'interrupted' | 'failed'
+
+interface CodexTestSnapshot {
+  mode: CodexTestMode
+  runId: string
+  status: CodexTestRunStatus
+  testing: boolean
+  cancelling: boolean
+  groupName?: string
+  savedAt?: number
+  startedAt: number
+  updatedAt: number
+  completed: number
+  total: number
+  rounds: number
+  concurrency: number
+  progress?: CodexTestProgress | CodexActualTestProgress
+  results: Record<string, CodexTestResult> | Record<string, CodexActualTestResult>
+  logs?: CodexActualTestLogEntry[]
+  options?: CodexActualTestOptions
+  error?: string
+}
+
 interface ProcessTestTargetRequest {
   host: string
   port: number

@@ -374,24 +374,28 @@ export async function mihomoCodexTest(
     uniqueProxies.length,
     Math.max(1, Math.trunc(concurrency) || 6)
   )
-  await ensureRuntimeTestChannelCapacity(requestedConcurrency)
-  const channels = getRuntimeCodexTestChannels()
-  if (channels.length === 0) throw new Error('Codex 测试通道不可用，请重启内核后重试')
-  const normalizedConcurrency = Math.min(
-    MAX_CODEX_TEST_CONCURRENCY,
-    channels.length,
-    uniqueProxies.length,
-    requestedConcurrency
-  )
-  const releaseTestChannel = acquireNetworkTestChannel('codex')
   const current: ActiveCodexTest = { controller: new AbortController(), cancelled: false }
   activeCodexTest = current
-  const successful = new Map<string, SuccessfulSample[]>()
-  const failed = new Map<string, FailedSample[]>()
-  const total = uniqueProxies.length * normalizedRounds
-  let completed = 0
+  let releaseTestChannel: (() => void) | undefined
 
   try {
+    await ensureRuntimeTestChannelCapacity(requestedConcurrency)
+    if (current.cancelled || current.controller.signal.aborted) throw abortError()
+
+    const channels = getRuntimeCodexTestChannels()
+    if (channels.length === 0) throw new Error('Codex 测试通道不可用，请重启内核后重试')
+    const normalizedConcurrency = Math.min(
+      MAX_CODEX_TEST_CONCURRENCY,
+      channels.length,
+      uniqueProxies.length,
+      requestedConcurrency
+    )
+    releaseTestChannel = acquireNetworkTestChannel('codex')
+    const successful = new Map<string, SuccessfulSample[]>()
+    const failed = new Map<string, FailedSample[]>()
+    const total = uniqueProxies.length * normalizedRounds
+    let completed = 0
+
     const runSample = async (
       proxy: string,
       round: number,
@@ -468,6 +472,6 @@ export async function mihomoCodexTest(
   } finally {
     current.controller.abort()
     if (activeCodexTest === current) activeCodexTest = undefined
-    releaseTestChannel()
+    releaseTestChannel?.()
   }
 }

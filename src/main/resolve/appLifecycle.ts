@@ -3,6 +3,7 @@ import { stopCore } from '../core/manager'
 import { stopNetworkDetection } from '../core/network'
 import { disableSysProxySync, triggerSysProxy } from '../sys/sysproxy'
 import { appendAppLog } from '../utils/log'
+import { stopAllCodexTests } from '../core/codex-test-manager'
 
 interface AppQuitLifecycleContext {
   getMainWindow: () => BrowserWindow | null
@@ -67,6 +68,12 @@ async function cleanupBeforeExit(useRegistry: boolean): Promise<void> {
     await stopNetworkDetection()
   } catch (error) {
     await appendAppLog(`[App]: stop network detection before exit failed, ${error}\n`)
+  }
+
+  try {
+    await stopAllCodexTests()
+  } catch (error) {
+    await appendAppLog(`[App]: stop Codex tests before exit failed, ${error}\n`)
   }
 
   await Promise.all([

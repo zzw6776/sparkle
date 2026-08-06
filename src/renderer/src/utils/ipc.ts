@@ -127,35 +127,50 @@ export async function cancelMihomoProxySpeedTest(): Promise<boolean> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoProxySpeedTest'))
 }
 
-export async function mihomoCodexTest(
-  proxies: string[],
-  rounds: number,
-  concurrency: number
-): Promise<CodexTestResult[]> {
-  return ipcErrorWrapper(
-    await window.electron.ipcRenderer.invoke('mihomoCodexTest', proxies, rounds, concurrency)
-  )
-}
-
-export async function cancelMihomoCodexTest(): Promise<boolean> {
-  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoCodexTest'))
-}
-
-export async function mihomoCodexActualTest(
+export async function startCodexTest(
   proxies: string[],
   rounds: number,
   concurrency: number,
-  options: CodexActualTestOptions
-): Promise<CodexActualTestResult[]> {
+  groupName?: string
+): Promise<CodexTestSnapshot> {
   return ipcErrorWrapper(
     await window.electron.ipcRenderer.invoke(
-      'mihomoCodexActualTest',
+      'startCodexTest',
       proxies,
       rounds,
       concurrency,
+      groupName
+    )
+  )
+}
+
+export async function startCodexActualTest(
+  proxies: string[],
+  rounds: number,
+  concurrency: number,
+  groupName?: string,
+  options: CodexActualTestOptions = {}
+): Promise<CodexTestSnapshot> {
+  return ipcErrorWrapper(
+    await window.electron.ipcRenderer.invoke(
+      'startCodexActualTest',
+      proxies,
+      rounds,
+      concurrency,
+      groupName,
       options
     )
   )
+}
+
+export async function getCodexTestSnapshot(
+  mode: CodexTestMode
+): Promise<CodexTestSnapshot | undefined> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('getCodexTestSnapshot', mode))
+}
+
+export async function stopCodexTest(mode?: CodexTestMode): Promise<boolean> {
+  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('stopCodexTest', mode))
 }
 
 export async function listCodexActualTestModels(): Promise<CodexActualTestModelOption[]> {
@@ -176,10 +191,6 @@ export async function installCodexRuntime(): Promise<CodexRuntimeStatus> {
 
 export async function cancelCodexRuntimeInstall(): Promise<boolean> {
   return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelCodexRuntimeInstall'))
-}
-
-export async function cancelMihomoCodexActualTest(): Promise<boolean> {
-  return ipcErrorWrapper(await window.electron.ipcRenderer.invoke('cancelMihomoCodexActualTest'))
 }
 
 export async function mihomoProcessTest(

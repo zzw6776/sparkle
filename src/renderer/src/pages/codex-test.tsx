@@ -99,6 +99,7 @@ const actualStageText: Record<CodexActualTestStage, string> = {
 const MIN_CONCURRENCY = 1
 const MAX_CONCURRENCY = 16
 const DEFAULT_CODEX_OPTION = '__CODEX_DEFAULT__'
+const CODEX_TEST_MODE_KEY = 'sparkle:codex-test-mode'
 const ACTUAL_TABLE_COLUMNS = 'grid-cols-[minmax(180px,1.7fr)_repeat(7,minmax(86px,1fr))_82px_72px]'
 const LINK_TABLE_COLUMNS = 'grid-cols-[minmax(160px,1.7fr)_repeat(5,minmax(74px,1fr))_82px_72px]'
 const EMPTY_LINK_RESULTS: Record<string, CodexTestResult> = {}
@@ -112,6 +113,22 @@ function normalizeConcurrency(value?: number): number {
 function normalizeActualConcurrency(value?: number): number {
   if (!Number.isFinite(value)) return 2
   return Math.min(4, Math.max(1, Math.trunc(value!)))
+}
+
+function readLastCodexTestMode(): TestMode {
+  try {
+    return window.localStorage.getItem(CODEX_TEST_MODE_KEY) === 'actual' ? 'actual' : 'link'
+  } catch {
+    return 'link'
+  }
+}
+
+function persistCodexTestMode(mode: TestMode): void {
+  try {
+    window.localStorage.setItem(CODEX_TEST_MODE_KEY, mode)
+  } catch {
+    // The selected mode is only a convenience and does not affect test execution.
+  }
 }
 
 const reasoningEffortOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
@@ -861,7 +878,7 @@ const CodexTest: React.FC = () => {
   const navigate = useNavigate()
   const { groups = [], mutate } = useGroups()
   const { appConfig, patchAppConfig } = useAppConfig()
-  const [mode, setMode] = useState<TestMode>('link')
+  const [mode, setMode] = useState<TestMode>(readLastCodexTestMode)
   const state = useSyncExternalStore(
     subscribeCodexTestStore,
     getCodexTestSnapshot,
@@ -873,6 +890,7 @@ const CodexTest: React.FC = () => {
     getCodexActualTestSnapshot
   )
   const [groupName, setGroupName] = useState(() => state.groupName || actualState.groupName || '')
+  const groupNameManuallySelectedRef = useRef(false)
   const [switchGroupName, setSwitchGroupName] = useState(FOLLOW_TEST_GROUP)
   const [actualSelected, setActualSelected] = useState<Set<string>>(new Set())
   const actualSelectionGroupRef = useRef<string | undefined>(undefined)
@@ -923,12 +941,24 @@ const CodexTest: React.FC = () => {
     setAllSelected: setAllLinkSelected
   } = useDefaultAllSelection(group?.name, proxyNames)
   const visibleResults =
-    state.groupName && group?.name !== state.groupName ? EMPTY_LINK_RESULTS : state.results
+    state.groupName && groups.length > 0 && group?.name !== state.groupName
+      ? EMPTY_LINK_RESULTS
+      : state.results
   const visibleActualResults =
-    actualState.groupName && group?.name !== actualState.groupName
+    actualState.groupName && groups.length > 0 && group?.name !== actualState.groupName
       ? EMPTY_ACTUAL_RESULTS
       : actualState.results
   const anyTesting = state.testing || actualState.testing
+
+  useEffect(() => {
+    if (actualState.testing && !state.testing && mode !== 'actual') {
+      setMode('actual')
+      persistCodexTestMode('actual')
+    } else if (state.testing && !actualState.testing && mode !== 'link') {
+      setMode('link')
+      persistCodexTestMode('link')
+    }
+  }, [actualState.testing, mode, state.testing])
   const codexRuntimePreference: CodexRuntimePreference =
     appConfig?.codexRuntimePreference ||
     (codexRuntimeStatus?.source === 'managed' && codexRuntimeStatus.state === 'ready'
@@ -986,12 +1016,12 @@ const CodexTest: React.FC = () => {
     [selectedActualModel]
   )
   useEffect(() => {
-    if (!groupName && groups[0]) {
-      const historyGroup = groups.find(
-        (item) => item.name === state.groupName || item.name === actualState.groupName
-      )
-      setGroupName(historyGroup?.name || groups[0].name)
-    }
+    if (!groups[0] || groupNameManuallySelectedRef.current) return
+    const historyGroup = groups.find(
+      (item) => item.name === state.groupName || item.name === actualState.groupName
+    )
+    const preferredGroupName = historyGroup?.name || groups[0].name
+    if (groupName !== preferredGroupName) setGroupName(preferredGroupName)
   }, [actualState.groupName, groupName, groups, state.groupName])
 
   const refreshActualModels = useCallback(() => {
@@ -1323,6 +1353,7 @@ const CodexTest: React.FC = () => {
     (nextMode: TestMode): void => {
       if (nextMode === 'actual') applyActualTopSelection(actualTopCount)
       setMode(nextMode)
+      persistCodexTestMode(nextMode)
     },
     [actualTopCount, applyActualTopSelection]
   )
@@ -1439,7 +1470,10 @@ const CodexTest: React.FC = () => {
             testGroupName={group?.name}
             switchGroupName={switchGroupName}
             testGroupDisabled={anyTesting}
-            onTestGroupChange={setGroupName}
+            onTestGroupChange={(name) => {
+              groupNameManuallySelectedRef.current = true
+              setGroupName(name)
+            }}
             onSwitchGroupChange={setSwitchGroupName}
           />
 

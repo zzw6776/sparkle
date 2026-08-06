@@ -1,16 +1,9 @@
-import { cancelMihomoCodexActualTest, mihomoCodexActualTest } from '@renderer/utils/ipc'
+import {
+  getCodexTestSnapshot as getCodexTestSnapshotFromMain,
+  startCodexActualTest,
+  stopCodexTest as stopCodexTestFromMain
+} from '@renderer/utils/ipc'
 import { notify } from '@renderer/utils/notification'
-import { readTestHistory, writeTestHistory } from '@renderer/utils/test-history'
-import { formatLatency } from '@renderer/utils/format-latency'
-
-const CODEX_ACTUAL_TEST_HISTORY_KEY = 'sparkle:codex-actual-test-history'
-
-interface PersistedCodexActualTestHistory {
-  groupName?: string
-  savedAt: number
-  results: Record<string, CodexActualTestResult>
-  logs?: CodexActualTestLogEntry[]
-}
 
 interface CodexActualTestStoreSnapshot {
   results: Record<string, CodexActualTestResult>
@@ -21,168 +14,102 @@ interface CodexActualTestStoreSnapshot {
   groupName?: string
   savedAt?: number
   logs: CodexActualTestLogEntry[]
+  status?: CodexTestRunStatus
 }
 
-let persistedHistory = readTestHistory<PersistedCodexActualTestHistory>(
-  CODEX_ACTUAL_TEST_HISTORY_KEY
-)
-
-function createIdleSnapshot(): CodexActualTestStoreSnapshot {
-  return {
-    results: persistedHistory?.results || {},
-    groupName: persistedHistory?.groupName,
-    savedAt: persistedHistory?.savedAt,
-    logs: persistedHistory?.logs || [],
-    testing: false,
-    cancelling: false
-  }
+const EMPTY_SNAPSHOT: CodexActualTestStoreSnapshot = {
+  results: {},
+  testing: false,
+  cancelling: false,
+  logs: []
 }
 
-let snapshot = createIdleSnapshot()
-let memoryReleased = false
-let generation = 0
-let nextLogId = 0
+let snapshot: CodexActualTestStoreSnapshot = EMPTY_SNAPSHOT
+let lastRunId: string | undefined
+let lastUpdatedAt = 0
+let hydrated = false
+let hydrationPromise: Promise<void> | undefined
 const listeners = new Set<() => void>()
-let pendingProgresses: CodexActualTestProgress[] = []
-let progressTimer: number | undefined
-let progressFlushInterval = 100
+const notifiedRunStatuses = new Set<string>()
 
-function hydrateMemory(): void {
-  if (!memoryReleased) return
-  persistedHistory = readTestHistory<PersistedCodexActualTestHistory>(CODEX_ACTUAL_TEST_HISTORY_KEY)
-  snapshot = createIdleSnapshot()
-  memoryReleased = false
-}
+function updateSnapshot(next: CodexActualTestStoreSnapshot, runId?: string, updatedAt = 0): void {
+  if (updatedAt < lastUpdatedAt) return
+  if (runId && runId === lastRunId && updatedAt === lastUpdatedAt) return
 
-function releaseMemoryIfIdle(): void {
-  if (memoryReleased || listeners.size > 0 || snapshot.testing) return
-  clearPendingProgress()
-  persistedHistory = undefined
-  snapshot = { results: {}, logs: [], testing: false, cancelling: false }
-  memoryReleased = true
-}
+  const previous = snapshot
+  snapshot = next
+  lastRunId = runId
+  lastUpdatedAt = updatedAt
 
-function logEntry(
-  message: string,
-  level: CodexActualTestLogLevel = 'info',
-  context?: { proxy?: string; worker?: number; round?: number }
-): CodexActualTestLogEntry {
-  return {
-    id: `${Date.now()}-${nextLogId++}`,
-    timestamp: Date.now(),
-    level,
-    message,
-    ...context
-  }
-}
-
-function appendLog(entry: CodexActualTestLogEntry): CodexActualTestLogEntry[] {
-  const logs = [...snapshot.logs, entry].slice(-300)
-  updateSnapshot({ logs })
-  return logs
-}
-
-function metric(value?: number): string {
-  return formatLatency(value)
-}
-
-function progressLogs(progress: CodexActualTestProgress): CodexActualTestLogEntry[] {
-  const context = { proxy: progress.proxy, worker: progress.worker, round: progress.round }
-  if (progress.stage === 'selecting') {
-    return [logEntry('正在切换隐藏测速通道并关闭旧连接', 'info', context)]
-  }
-  if (progress.stage === 'starting') {
-    return [logEntry('正在启动或复用独立 Codex 后台', 'info', context)]
-  }
-  if (progress.stage === 'requesting') {
-    const unavailableHint = '未获取到（若刚更新测试功能，请重启 Sparkle 后重试）'
-    return [
-      logEntry(`模型：${progress.model || unavailableHint}`, 'info', context),
-      logEntry(`推理深度：${progress.reasoningEffort || '跟随模型默认'}`, 'info', context),
-      logEntry(`发送：${progress.request || unavailableHint}`, 'info', context),
-      logEntry('真实请求已发送，正在等待 Codex 返回', 'info', context)
-    ]
-  }
-  if (progress.stage === 'streaming') {
-    return [logEntry('已收到首个响应片段', 'info', context)]
+  if (
+    runId &&
+    !next.testing &&
+    previous.testing &&
+    !notifiedRunStatuses.has(`${runId}:${next.savedAt || updatedAt}`)
+  ) {
+    notifiedRunStatuses.add(`${runId}:${next.savedAt || updatedAt}`)
+    if (next.error) {
+      notify(next.error, { variant: 'danger' })
+    } else if (next.status === 'stopped') {
+      notify('Codex 真实响应测试已停止', { variant: 'warning' })
+    } else if (next.status === 'failed') {
+      notify('Codex 真实响应测试失败', { variant: 'danger' })
+    } else {
+      const succeeded = Object.values(next.results).filter((result) => result.succeeded > 0).length
+      const total = Object.keys(next.results).length
+      notify(`Codex 真实响应测试完成 ${succeeded}/${total}`, {
+        variant: succeeded > 0 ? 'success' : 'danger'
+      })
+    }
   }
 
-  const roundResult = progress.result?.roundResults.find((item) => item.round === progress.round)
-  if (!roundResult) {
-    return [logEntry('本轮已结束，但没有收到详细结果', 'error', context)]
-  }
-  const route = roundResult.routeVerified ? '路由已验证' : '路由未验证'
-  const tokens = roundResult.tokenUsage?.totalTokens ?? 0
-  const reply = logEntry(`回复：${roundResult.response || '未收到文本回复'}`, 'info', context)
-  if (!roundResult.success) {
-    return [
-      reply,
-      logEntry(
-        `失败：${roundResult.error || '未知错误'}；${route}；完整 ${metric(roundResult.totalMs)}；Token ${tokens}`,
-        'error',
-        context
-      )
-    ]
-  }
-  return [
-    reply,
-    logEntry(
-      `成功：首字 ${metric(roundResult.firstTokenMs)}；完整 ${metric(roundResult.totalMs)}；${route}；Token ${tokens}`,
-      'success',
-      context
-    )
-  ]
-}
-
-function updateSnapshot(patch: Partial<CodexActualTestStoreSnapshot>): void {
-  snapshot = { ...snapshot, ...patch }
   listeners.forEach((listener) => listener())
 }
 
-function persistResults(
-  results: Record<string, CodexActualTestResult>,
-  logs: CodexActualTestLogEntry[],
-  groupName?: string
-): void {
-  const savedAt = Date.now()
-  persistedHistory = { groupName, savedAt, results, logs }
-  writeTestHistory(CODEX_ACTUAL_TEST_HISTORY_KEY, persistedHistory)
-  updateSnapshot({ results, logs, groupName, savedAt })
+function applyMainSnapshot(value: CodexTestSnapshot | undefined): void {
+  if (!value || value.mode !== 'actual') return
+  updateSnapshot(
+    {
+      results: value.results as Record<string, CodexActualTestResult>,
+      testing: value.testing,
+      cancelling: value.cancelling,
+      progress: value.progress as CodexActualTestProgress | undefined,
+      error: value.error,
+      groupName: value.groupName,
+      savedAt: value.savedAt,
+      logs: value.logs || [],
+      status: value.status
+    },
+    value.runId,
+    value.updatedAt
+  )
 }
 
-function flushProgress(): void {
-  if (progressTimer !== undefined) window.clearTimeout(progressTimer)
-  progressTimer = undefined
-  if (pendingProgresses.length === 0 || !snapshot.testing) return
-
-  const progresses = pendingProgresses
-  pendingProgresses = []
-  let logs = snapshot.logs
-  let results = snapshot.results
-  progresses.forEach((progress) => {
-    logs = [...logs, ...progressLogs(progress)].slice(-300)
-    if (progress.result) results = { ...results, [progress.result.proxy]: progress.result }
-  })
-  updateSnapshot({ progress: progresses.at(-1), logs, results })
-}
-
-function clearPendingProgress(): void {
-  if (progressTimer !== undefined) window.clearTimeout(progressTimer)
-  progressTimer = undefined
-  pendingProgresses = []
+async function hydrateFromMain(): Promise<void> {
+  if (hydrated || hydrationPromise) return hydrationPromise
+  hydrationPromise = getCodexTestSnapshotFromMain('actual')
+    .then((value) => {
+      applyMainSnapshot(value)
+      hydrated = true
+    })
+    .catch((error) => {
+      notify(`读取 Codex 真实响应测试状态失败：${String(error)}`, { variant: 'danger' })
+    })
+    .finally(() => {
+      hydrationPromise = undefined
+    })
+  return hydrationPromise
 }
 
 export function subscribeCodexActualTestStore(listener: () => void): () => void {
-  hydrateMemory()
   listeners.add(listener)
+  void hydrateFromMain()
   return () => {
     listeners.delete(listener)
-    releaseMemoryIfIdle()
   }
 }
 
 export function getCodexActualTestSnapshot(): CodexActualTestStoreSnapshot {
-  hydrateMemory()
   return snapshot
 }
 
@@ -202,123 +129,26 @@ export async function runCodexActualTest(
     return
   }
 
-  const currentGeneration = generation
-  progressFlushInterval = proxies.length > 30 ? 500 : 100
-  clearPendingProgress()
-  const previous = {
-    results: snapshot.results,
-    groupName: snapshot.groupName,
-    savedAt: snapshot.savedAt
-  }
-  updateSnapshot({
-    results: {},
-    logs: [
-      logEntry(
-        `开始测试 ${proxies.length} 个节点，共 ${rounds} 轮，并发 ${concurrency}；模型 ${options.model || 'Codex 默认'}；推理深度 ${options.reasoningEffort || '模型默认'}`
-      )
-    ],
-    groupName,
-    testing: true,
-    cancelling: false,
-    progress: undefined,
-    error: undefined
-  })
-
   try {
-    const results = await mihomoCodexActualTest(proxies, rounds, concurrency, options)
-    if (currentGeneration !== generation) return
-    flushProgress()
-    const resultMap = Object.fromEntries(results.map((result) => [result.proxy, result]))
-    const logs = appendLog(
-      logEntry(
-        `测试完成：${results.filter((result) => result.succeeded > 0).length}/${results.length} 个节点至少成功 1 轮`,
-        results.some((result) => result.succeeded > 0) ? 'success' : 'error'
-      )
-    )
-    persistResults(resultMap, logs, groupName)
-    const succeeded = results.filter((result) => result.succeeded > 0).length
-    notify(`Codex 真实响应测试完成 ${succeeded}/${results.length}`, {
-      variant: succeeded > 0 ? 'success' : 'danger'
-    })
+    const value = await startCodexActualTest(proxies, rounds, concurrency, groupName, options)
+    applyMainSnapshot(value)
   } catch (error) {
-    if (currentGeneration !== generation) return
-    flushProgress()
-    const message = String(error)
-    if (message === 'Codex 真实响应测试已停止') {
-      const logs = [...snapshot.logs, logEntry('测试已由用户停止')].slice(-300)
-      if (Object.keys(snapshot.results).length > 0) {
-        persistResults(snapshot.results, logs, groupName)
-      } else {
-        updateSnapshot({ ...previous, logs })
-      }
-    } else {
-      updateSnapshot(previous)
-      appendLog(logEntry(`测试异常终止：${message}`, 'error'))
-      updateSnapshot({ error: message })
-      notify(message, { variant: 'danger' })
-    }
-  } finally {
-    if (currentGeneration === generation) {
-      if (
-        snapshot.logs.length > 0 &&
-        persistedHistory?.logs?.at(-1)?.id !== snapshot.logs.at(-1)?.id
-      ) {
-        const savedAt = snapshot.savedAt || Date.now()
-        persistedHistory = {
-          groupName: snapshot.groupName || groupName,
-          savedAt,
-          results: snapshot.results,
-          logs: snapshot.logs
-        }
-        writeTestHistory(CODEX_ACTUAL_TEST_HISTORY_KEY, persistedHistory)
-        updateSnapshot({ savedAt })
-      }
-      updateSnapshot({ testing: false, cancelling: false, progress: undefined })
-      releaseMemoryIfIdle()
-    }
+    notify(String(error), { variant: 'danger' })
   }
 }
 
 export async function stopCodexActualTest(): Promise<void> {
   if (!snapshot.testing || snapshot.cancelling) return
-  updateSnapshot({ cancelling: true })
-  try {
-    await cancelMihomoCodexActualTest()
-  } finally {
-    if (snapshot.testing) updateSnapshot({ cancelling: false })
-  }
+  await stopCodexTestFromMain('actual')
 }
 
-function resetCodexActualTestStore(): void {
-  generation++
-  clearPendingProgress()
-  if (snapshot.testing) void cancelMihomoCodexActualTest()
-  persistedHistory = readTestHistory<PersistedCodexActualTestHistory>(CODEX_ACTUAL_TEST_HISTORY_KEY)
-  snapshot = createIdleSnapshot()
-  memoryReleased = false
-  listeners.forEach((listener) => listener())
-  releaseMemoryIfIdle()
-}
-
-const unsubscribeProgress = window.electron.ipcRenderer.on(
-  'mihomoCodexActualTestProgress',
-  (_event, progress: CodexActualTestProgress) => {
-    if (!snapshot.testing) return
-    pendingProgresses.push(progress)
-    if (progressTimer === undefined) {
-      progressTimer = window.setTimeout(flushProgress, progressFlushInterval)
-    }
-  }
-)
-const unsubscribeCoreStarted = window.electron.ipcRenderer.on(
-  'core-started',
-  resetCodexActualTestStore
+const unsubscribeSnapshot = window.electron.ipcRenderer.on(
+  'codexTestSnapshot',
+  (_event, value: CodexTestSnapshot) => applyMainSnapshot(value)
 )
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    clearPendingProgress()
-    unsubscribeProgress()
-    unsubscribeCoreStarted()
+    unsubscribeSnapshot()
   })
 }

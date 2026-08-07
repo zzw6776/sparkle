@@ -7,15 +7,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { IoLink } from 'react-icons/io5'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
-import { platform } from '@renderer/utils/init'
 import TrafficChart, { type TrafficChartHandle } from './traffic-chart'
-
-let currentUpload: number | undefined = undefined
-let currentDownload: number | undefined = undefined
-let hasShowTraffic = false
-let drawing = false
-let trayTrafficCanvas: HTMLCanvasElement | null = null
-let trayTrafficContext: CanvasRenderingContext2D | null = null
 
 interface Props {
   iconOnly?: boolean
@@ -24,13 +16,7 @@ interface Props {
 const ConnCard: React.FC<Props> = (props) => {
   const { iconOnly } = props
   const { appConfig } = useAppConfig()
-  const {
-    showTraffic = false,
-    connectionCardStatus = 'col-span-2',
-    disableAnimation = false
-  } = appConfig || {}
-  const showTrafficRef = useRef(showTraffic)
-  showTrafficRef.current = showTraffic
+  const { connectionCardStatus = 'col-span-2', disableAnimation = false } = appConfig || {}
 
   const location = useLocation()
   const navigate = useNavigate()
@@ -53,28 +39,11 @@ const ConnCard: React.FC<Props> = (props) => {
   const transform = tf ? { x: tf.x, y: tf.y, scaleX: 1, scaleY: 1 } : null
 
   useEffect(() => {
-    const handleTraffic = async (_e: unknown, info: ControllerTraffic): Promise<void> => {
+    const handleTraffic = (_e: unknown, info: ControllerTraffic): void => {
       setUpload(info.up)
       setDownload(info.down)
 
       trafficChartRef.current?.push(info.up + info.down)
-
-      if (platform === 'darwin' && showTrafficRef.current) {
-        if (drawing) return
-        drawing = true
-        try {
-          await drawTrayTrafficIcon(info.up, info.down)
-          hasShowTraffic = true
-        } catch {
-          // ignore
-        } finally {
-          drawing = false
-        }
-      } else {
-        if (!hasShowTraffic) return
-        window.electron.ipcRenderer.send('trayIconUpdate')
-        hasShowTraffic = false
-      }
     }
 
     const unsubscribe = window.electron.ipcRenderer.on('mihomoTraffic', handleTraffic)
@@ -197,34 +166,3 @@ const ConnCard: React.FC<Props> = (props) => {
 export default React.memo(ConnCard, (prevProps, nextProps) => {
   return prevProps.iconOnly === nextProps.iconOnly
 })
-
-const drawTrayTrafficIcon = async (upload: number, download: number): Promise<void> => {
-  if (upload === currentUpload && download === currentDownload) return
-  currentUpload = upload
-  currentDownload = download
-
-  const uploadText = `${calcTraffic(upload)}/s`
-  const downloadText = `${calcTraffic(download)}/s`
-  if (!trayTrafficCanvas) {
-    trayTrafficCanvas = document.createElement('canvas')
-    trayTrafficCanvas.width = 118
-    trayTrafficCanvas.height = 36
-    trayTrafficContext = trayTrafficCanvas.getContext('2d')
-  }
-
-  const ctx = trayTrafficContext
-  if (!ctx) return
-
-  ctx.clearRect(0, 0, trayTrafficCanvas.width, trayTrafficCanvas.height)
-  ctx.fillStyle = '#000'
-  ctx.font = 'bold 18px "PingFang SC", Arial'
-  ctx.textBaseline = 'alphabetic'
-  ctx.textAlign = 'left'
-  ctx.fillText('↑', 0, 15)
-  ctx.fillText('↓', 0, 34)
-  ctx.textAlign = 'right'
-  ctx.fillText(uploadText, 118, 15)
-  ctx.fillText(downloadText, 118, 34)
-
-  window.electron.ipcRenderer.send('trayIconUpdate', trayTrafficCanvas.toDataURL('image/png'))
-}

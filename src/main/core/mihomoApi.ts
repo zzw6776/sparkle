@@ -4,7 +4,7 @@ import tls from 'tls'
 import { getAppConfig, getControledMihomoConfig } from '../config'
 import { mainWindow } from '..'
 import WebSocket from 'ws'
-import { customTrayWindow, tray } from '../resolve/tray'
+import { customTrayWindow, tray, updateTrayTraffic } from '../resolve/tray'
 import { calcTraffic } from '../utils/calc'
 import { getRuntimeConfig } from './factory'
 import { floatingWindow } from '../resolve/floatingWindow'
@@ -561,6 +561,7 @@ const mihomoTraffic = async (): Promise<void> => {
             `${calcTraffic(json.down)}/s`.padStart(9)
         )
       }
+      void updateTrayTraffic(json.up, json.down).catch(() => {})
       safeSendToWindow(floatingWindow, 'mihomoTraffic', json)
       if (customTrayWindow && !customTrayWindow.isDestroyed() && customTrayWindow.isVisible()) {
         safeSendToWindow(customTrayWindow, 'mihomoTraffic', json)

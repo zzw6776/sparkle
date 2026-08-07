@@ -36,16 +36,25 @@ import { is } from '@electron-toolkit/utils'
 import { extname, join } from 'path'
 import { applyTheme } from './theme'
 import { existsSync } from 'fs'
+import { calcTraffic } from '../utils/calc'
+import type { Canvas } from '@napi-rs/canvas'
 
 export let tray: Tray | null = null
 export let customTrayWindow: BrowserWindow | null = null
 let trayMenu: Menu | null = null
-let trayIconUpdateListenerRegistered = false
 let updateTrayMenuListenerRegistered = false
 let lastTrafficTrayIcon: string | null = null
+let trafficCanvas: Canvas | null = null
+let canvasModulePromise: Promise<typeof import('@napi-rs/canvas')> | null = null
+let trafficFontFamily: 'SF Pro Text' | 'System Font' | 'Arial' | null = null
+let trafficRenderSequence = 0
 type TrayImage = Electron.NativeImage | string
 const customTrayIconSize = 16
 const customTrayIconScaleFactors = [1, 1.25, 1.5, 2, 2.5, 3]
+const trafficIconWidth = 118
+const trafficIconHeight = 36
+const trafficArrowGap = 4
+const sfProTextPath = '/System/Library/Fonts/SFNS.ttf'
 
 function formatDelayText(delay: number): string {
   if (delay === 0) {
@@ -121,6 +130,76 @@ function createTrafficTrayImage(png: string): Electron.NativeImage | null {
 
   image.setTemplateImage(true)
   return image
+}
+
+async function renderTrafficTrayIcon(upload: number, download: number): Promise<string> {
+  canvasModulePromise ??= import('@napi-rs/canvas')
+  const { createCanvas, GlobalFonts } = await canvasModulePromise
+  trafficCanvas ??= createCanvas(trafficIconWidth, trafficIconHeight)
+  if (!trafficFontFamily) {
+    if (!GlobalFonts.has('SF Pro Text') && existsSync(sfProTextPath)) {
+      GlobalFonts.registerFromPath(sfProTextPath, 'SF Pro Text')
+    }
+    trafficFontFamily = GlobalFonts.has('SF Pro Text')
+      ? 'SF Pro Text'
+      : GlobalFonts.has('System Font')
+        ? 'System Font'
+        : 'Arial'
+  }
+
+  const formatTraffic = (bytes: number): string => {
+    if (bytes >= 1024) return calcTraffic(bytes)
+    const fixed = bytes.toFixed(2)
+    if (fixed.length <= 5) return `${fixed} B`
+    if (fixed.length === 6) return `${bytes.toFixed(1)} B`
+    return `${Math.round(bytes)} B`
+  }
+  const uploadText = `${formatTraffic(upload)}/s`
+  const downloadText = `${formatTraffic(download)}/s`
+  const context = trafficCanvas.getContext('2d')
+  context.clearRect(0, 0, trafficIconWidth, trafficIconHeight)
+  context.fillStyle = '#000'
+  context.font = `700 18px "${trafficFontFamily}"`
+  context.textBaseline = 'alphabetic'
+  context.textAlign = 'right'
+  const maxTrafficTextWidth = Math.max(
+    context.measureText(uploadText).width,
+    context.measureText(downloadText).width
+  )
+  const arrowRight = Math.max(0, trafficIconWidth - maxTrafficTextWidth - trafficArrowGap)
+  context.fillText('↑', arrowRight, 15)
+  context.fillText('↓', arrowRight, 34)
+  context.fillText(uploadText, trafficIconWidth, 15)
+  context.fillText(downloadText, trafficIconWidth, 34)
+  return trafficCanvas.toDataURL('image/png')
+}
+
+export async function updateTrayTraffic(upload: number, download: number): Promise<void> {
+  if (process.platform !== 'darwin' || !tray) return
+
+  const { customTrayIcon = '', showTraffic = false } = await getAppConfig()
+  const customIcon = createCustomTrayImage(customTrayIcon)
+  if (customIcon) {
+    trafficRenderSequence++
+    tray.setImage(customIcon)
+    return
+  }
+  if (!showTraffic) {
+    trafficRenderSequence++
+    lastTrafficTrayIcon = null
+    tray.setImage(createDarwinTrayIcon())
+    trafficCanvas = null
+    return
+  }
+
+  const sequence = ++trafficRenderSequence
+  const png = await renderTrafficTrayIcon(upload, download)
+  if (sequence !== trafficRenderSequence) return
+
+  const image = createTrafficTrayImage(png)
+  if (!image) return
+  lastTrafficTrayIcon = png
+  tray.setImage(image)
 }
 
 function positionCustomTrayWindow(win: BrowserWindow): void {
@@ -538,28 +617,6 @@ export async function createTray(): Promise<void> {
     if (!useDockIcon && app.dock) {
       app.dock.hide()
     }
-    if (!trayIconUpdateListenerRegistered) {
-      ipcMain.on('trayIconUpdate', async (_, png?: string) => {
-        const { customTrayIcon = '' } = await getAppConfig()
-        const customIcon = createCustomTrayImage(customTrayIcon)
-        if (customIcon) {
-          tray?.setImage(customIcon)
-          return
-        }
-        if (!png) {
-          lastTrafficTrayIcon = null
-          tray?.setImage(createDarwinTrayIcon())
-          return
-        }
-        lastTrafficTrayIcon = png
-        const image = createTrafficTrayImage(png)
-        if (!image) {
-          return
-        }
-        tray?.setImage(image)
-      })
-      trayIconUpdateListenerRegistered = true
-    }
     tray?.addListener('right-click', async () => {
       await triggerMainWindow()
     })
@@ -679,6 +736,8 @@ export async function closeTrayIcon(): Promise<void> {
     customTrayWindow.destroy()
   }
   customTrayWindow = null
+  trafficRenderSequence++
+  trafficCanvas = null
 }
 
 export function setDockVisible(visible: boolean): void {

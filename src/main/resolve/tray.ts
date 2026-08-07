@@ -51,9 +51,9 @@ let trafficRenderSequence = 0
 type TrayImage = Electron.NativeImage | string
 const customTrayIconSize = 16
 const customTrayIconScaleFactors = [1, 1.25, 1.5, 2, 2.5, 3]
-const trafficIconWidth = 118
+const trafficIconWidth = 110
 const trafficIconHeight = 36
-const trafficArrowGap = 4
+const trafficHorizontalPadding = 2
 const sfProTextPath = '/System/Library/Fonts/SFNS.ttf'
 
 function formatDelayText(delay: number): string {
@@ -135,7 +135,6 @@ function createTrafficTrayImage(png: string): Electron.NativeImage | null {
 async function renderTrafficTrayIcon(upload: number, download: number): Promise<string> {
   canvasModulePromise ??= import('@napi-rs/canvas')
   const { createCanvas, GlobalFonts } = await canvasModulePromise
-  trafficCanvas ??= createCanvas(trafficIconWidth, trafficIconHeight)
   if (!trafficFontFamily) {
     if (!GlobalFonts.has('SF Pro Text') && existsSync(sfProTextPath)) {
       GlobalFonts.registerFromPath(sfProTextPath, 'SF Pro Text')
@@ -156,21 +155,19 @@ async function renderTrafficTrayIcon(upload: number, download: number): Promise<
   }
   const uploadText = `${formatTraffic(upload)}/s`
   const downloadText = `${formatTraffic(download)}/s`
+  trafficCanvas ??= createCanvas(trafficIconWidth, trafficIconHeight)
   const context = trafficCanvas.getContext('2d')
   context.clearRect(0, 0, trafficIconWidth, trafficIconHeight)
   context.fillStyle = '#000'
   context.font = `700 18px "${trafficFontFamily}"`
   context.textBaseline = 'alphabetic'
+  context.textAlign = 'left'
+  context.fillText('↑', trafficHorizontalPadding, 15)
+  context.fillText('↓', trafficHorizontalPadding, 34)
   context.textAlign = 'right'
-  const maxTrafficTextWidth = Math.max(
-    context.measureText(uploadText).width,
-    context.measureText(downloadText).width
-  )
-  const arrowRight = Math.max(0, trafficIconWidth - maxTrafficTextWidth - trafficArrowGap)
-  context.fillText('↑', arrowRight, 15)
-  context.fillText('↓', arrowRight, 34)
-  context.fillText(uploadText, trafficIconWidth, 15)
-  context.fillText(downloadText, trafficIconWidth, 34)
+  const textRight = trafficIconWidth - trafficHorizontalPadding
+  context.fillText(uploadText, textRight, 15)
+  context.fillText(downloadText, textRight, 34)
   return trafficCanvas.toDataURL('image/png')
 }
 

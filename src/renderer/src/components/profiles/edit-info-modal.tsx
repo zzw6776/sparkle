@@ -13,23 +13,21 @@ import {
 import type { ReactNode } from 'react'
 import React, { useState } from 'react'
 import { useOverrideConfig } from '@renderer/hooks/use-override-config'
-import { ageIdentityToRecipient, generateAgeKeyPair, restartCore } from '@renderer/utils/ipc'
+import { ageIdentityToRecipient, generateAgeKeyPair } from '@renderer/utils/ipc'
 import { MdDeleteForever } from 'react-icons/md'
 import { FaPlus } from 'react-icons/fa6'
-import { IoIosHelpCircle } from 'react-icons/io'
 import { BiCopy, BiHide, BiShow } from 'react-icons/bi'
 import { LuArrowRight, LuRefreshCw } from 'react-icons/lu'
 import { notify } from '@renderer/utils/notification'
 
 interface Props {
   item: ProfileItem
-  isCurrent: boolean
   updateProfileItem: (item: ProfileItem) => Promise<void>
   onClose: () => void
 }
 
 const EditInfoModal: React.FC<Props> = (props) => {
-  const { item, isCurrent, updateProfileItem, onClose } = props
+  const { item, updateProfileItem, onClose } = props
   const { overrideConfig } = useOverrideConfig()
   const { items: overrideItems = [] } = overrideConfig || {}
   const [values, setValues] = useState({ ...item, autoUpdate: item.autoUpdate ?? true })
@@ -67,8 +65,13 @@ const EditInfoModal: React.FC<Props> = (props) => {
 
   const onSave = async (): Promise<void> => {
     try {
+      const normalizedInterval =
+        values.interval && values.interval > 0
+          ? Math.min(35791, Math.max(1, values.interval))
+          : 0
       const itemToSave = {
         ...values,
+        interval: normalizedInterval,
         override: values.override?.filter(
           (i) =>
             overrideItems.find((t) => t.id === i) && !overrideItems.find((t) => t.id === i)?.global
@@ -76,9 +79,6 @@ const EditInfoModal: React.FC<Props> = (props) => {
       }
 
       await updateProfileItem(itemToSave)
-      if (item.id && isCurrent) {
-        await restartCore()
-      }
       onClose()
     } catch (e) {
       notify(e, { variant: 'danger' })
@@ -319,9 +319,11 @@ const EditInfoModal: React.FC<Props> = (props) => {
                         setValues({ ...values, verify: v })
                       }}
                     >
-                      <Switch.Control>
-                        <Switch.Thumb />
-                      </Switch.Control>
+                      <Switch.Content>
+                        <Switch.Control>
+                          <Switch.Thumb />
+                        </Switch.Control>
+                      </Switch.Content>
                     </Switch>
                   )}
                 {values.type === 'remote' &&
@@ -335,9 +337,11 @@ const EditInfoModal: React.FC<Props> = (props) => {
                         setValues({ ...values, useProxy: v })
                       }}
                     >
-                      <Switch.Control>
-                        <Switch.Thumb />
-                      </Switch.Control>
+                      <Switch.Content>
+                        <Switch.Control>
+                          <Switch.Thumb />
+                        </Switch.Control>
+                      </Switch.Content>
                     </Switch>
                   )}
                 {values.type === 'remote' &&
@@ -351,9 +355,11 @@ const EditInfoModal: React.FC<Props> = (props) => {
                         setValues({ ...values, autoUpdate: v })
                       }}
                     >
-                      <Switch.Control>
-                        <Switch.Thumb />
-                      </Switch.Control>
+                      <Switch.Content>
+                        <Switch.Control>
+                          <Switch.Thumb />
+                        </Switch.Control>
+                      </Switch.Content>
                     </Switch>
                   )}
                 {renderField(
@@ -450,30 +456,18 @@ const EditInfoModal: React.FC<Props> = (props) => {
                     <Input
                       aria-label="更新间隔（分钟）"
                       type="number"
+                      min={1}
+                      max={35791}
+                      placeholder="1 ~ 35791"
                       data-setting-input="edit-modal-number"
                       value={values.interval?.toString() ?? ''}
                       variant="secondary"
                       onChange={(event) => {
-                        setValues({ ...values, interval: parseInt(event.target.value) })
+                        const raw = parseInt(event.target.value) || 0
+                        const clamped = raw > 0 ? Math.min(35791, raw) : 0
+                        setValues({ ...values, interval: clamped })
                       }}
-                      disabled={values.locked}
-                    />,
-                    {
-                      actions: values.locked ? (
-                        <Tooltip delay={0}>
-                          <Tooltip.Trigger>
-                            <button
-                              type="button"
-                              aria-label="说明"
-                              className="flex size-7 items-center justify-center rounded-full bg-transparent p-0 text-foreground outline-none ring-0 shadow-none hover:bg-transparent focus:bg-transparent focus:outline-none focus-visible:outline-none focus-visible:ring-0"
-                            >
-                              <IoIosHelpCircle className="text-lg" />
-                            </button>
-                          </Tooltip.Trigger>
-                          <Tooltip.Content>当前更新间隔由远程管理</Tooltip.Content>
-                        </Tooltip>
-                      ) : undefined
-                    }
+                    />
                   )}
                 {renderField('覆写', overrideContent, { align: 'start', divider: false })}
               </Surface>

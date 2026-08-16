@@ -172,9 +172,11 @@ const ProfileSettingDrawer: React.FC<Props> = (props) => {
                     patchAppConfig({ diffWorkDir: v })
                   }}
                 >
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                  </Switch.Content>
                 </Switch>
               </SettingItem>
               <SettingItem title="订阅拉取 UA" {...settingItemProps} divider>

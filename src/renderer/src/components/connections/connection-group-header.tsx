@@ -22,7 +22,7 @@ interface Props {
   iconUrl?: string
   displayName?: string
   isPinned: boolean
-  onToggle: (key: string, currentlyOpen: boolean) => void
+  onToggle: (key: string) => void
   onCloseAll: (key: string) => void
   onSpeedTest: (key: string) => void
   onPin: (key: string) => void
@@ -62,7 +62,7 @@ const ConnectionGroupHeaderComponent: React.FC<Props> = ({
 
   return (
     <div className={`w-full pt-2 ${isLast && !expanded ? 'pb-2' : ''} px-2`}>
-      <Card as="div" isPressable fullWidth onPress={() => onToggle(groupKey, expanded)}>
+      <Card as="div" isPressable fullWidth onPress={() => onToggle(groupKey)}>
         <CardBody className="w-full h-16 p-0">
           <div className="flex justify-between items-center h-full pl-2 pr-3">
             <div className="flex items-center overflow-hidden whitespace-nowrap h-full min-w-0">

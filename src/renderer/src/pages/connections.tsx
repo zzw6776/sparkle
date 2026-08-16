@@ -94,7 +94,6 @@ const Connections: React.FC = () => {
   const pausedRef = useRef(paused)
   const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
-  const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
 
   const iconRequestQueue = useRef(new Set<string>())
   const processingIcons = useRef(new Set<string>())
@@ -232,7 +231,7 @@ const Connections: React.FC = () => {
     const members: ControllerConnectionDetail[] = []
     const localIndex: number[] = []
     for (const group of connectionGroups) {
-      if (expandedContent.has(group.key)) {
+      if (expandedGroups.has(group.key)) {
         counts.push(group.connections.length)
         group.connections.forEach((conn, idx) => {
           members.push(conn)
@@ -243,16 +242,15 @@ const Connections: React.FC = () => {
       }
     }
     return { groupCounts: counts, flatMembers: members, flatMemberLocalIndex: localIndex }
-  }, [connectionGroups, expandedContent])
+  }, [connectionGroups, expandedGroups])
 
   useEffect(() => {
     if (!grouped) {
       setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()))
-      setExpandedContent((prev) => (prev.size === 0 ? prev : new Set()))
       return
     }
     const liveKeys = new Set(connectionGroups.map((g) => g.key))
-    const prune = (prev: Set<string>): Set<string> => {
+    setExpandedGroups((prev) => {
       let changed = false
       const next = new Set<string>()
       for (const key of prev) {
@@ -260,9 +258,7 @@ const Connections: React.FC = () => {
         else changed = true
       }
       return changed ? next : prev
-    }
-    setExpandedGroups(prune)
-    setExpandedContent(prune)
+    })
   }, [grouped, connectionGroups])
 
   allConnectionsRef.current = allConnections
@@ -309,34 +305,16 @@ const Connections: React.FC = () => {
     [tab, trashClosedConnection]
   )
 
-  const toggleGroup = useCallback((key: string, currentlyOpen: boolean): void => {
-    if (currentlyOpen) {
-      setExpandedContent((prev) => {
-        if (!prev.has(key)) return prev
-        const next = new Set(prev)
+  const toggleGroup = useCallback((key: string): void => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
         next.delete(key)
-        return next
-      })
-      setExpandedGroups((prev) => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
-      })
-    } else {
-      setExpandedGroups((prev) => {
-        const next = new Set(prev)
+      } else {
         next.add(key)
-        return next
-      })
-      setTimeout(() => {
-        setExpandedContent((prev) => {
-          if (prev.has(key)) return prev
-          const next = new Set(prev)
-          next.add(key)
-          return next
-        })
-      }, 0)
-    }
+      }
+      return next
+    })
   }, [])
 
   const closeGroup = useCallback((key: string): void => {
@@ -877,11 +855,6 @@ const Connections: React.FC = () => {
   const tabRef = useRef(tab)
   tabRef.current = tab
 
-  const toggleGroupRef = useRef(toggleGroup)
-  toggleGroupRef.current = toggleGroup
-  const toggleGroupStable = useCallback((key: string, currentlyOpen: boolean) => {
-    toggleGroupRef.current(key, currentlyOpen)
-  }, [])
   const closeGroupRef = useRef(closeGroup)
   closeGroupRef.current = closeGroup
   const closeGroupStable = useCallback((key: string) => {
@@ -951,21 +924,21 @@ const Connections: React.FC = () => {
           download={group.download}
           uploadSpeed={group.uploadSpeed}
           downloadSpeed={group.downloadSpeed}
-          expanded={expandedGroupsRef.current.has(group.key)}
+          expanded={expandedGroups.has(group.key)}
           isLast={index === connectionGroupsRef.current.length - 1}
           isClosed={tabRef.current === 'closed'}
           displayIcon={showIcon}
           iconUrl={iconUrl}
           displayName={displayName}
           isPinned={pinnedProcessKeys.has(group.key)}
-          onToggle={toggleGroupStable}
+          onToggle={toggleGroup}
           onCloseAll={closeGroupStable}
           onSpeedTest={openProcessTest}
           onPin={togglePinnedProcess}
         />
       )
     },
-    [toggleGroupStable, closeGroupStable, openProcessTest, pinnedProcessKeys, togglePinnedProcess]
+    [expandedGroups, toggleGroup, closeGroupStable, openProcessTest, pinnedProcessKeys, togglePinnedProcess]
   )
 
   return (

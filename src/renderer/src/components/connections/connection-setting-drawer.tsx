@@ -13,6 +13,15 @@ interface Props {
 
 const DRAWER_CLOSE_ANIMATION_MS = 700
 
+function toBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (value && typeof value === 'object' && 'target' in value) {
+    const target = (value as { target?: { checked?: boolean } }).target
+    return Boolean(target?.checked)
+  }
+  return Boolean(value)
+}
+
 const ConnectionSettingDrawer: React.FC<Props> = (props) => {
   const { onClose, reopenSignal } = props
   const { appConfig, patchAppConfig } = useAppConfig()
@@ -74,40 +83,46 @@ const ConnectionSettingDrawer: React.FC<Props> = (props) => {
               <SettingItem title="显示应用图标" {...settingItemProps} divider>
                 <Switch
                   aria-label="显示应用图标"
-                  isSelected={displayIcon}
+                  isSelected={Boolean(displayIcon)}
                   onChange={(v) => {
-                    patchAppConfig({ displayIcon: v })
+                    patchAppConfig({ displayIcon: toBoolean(v) })
                   }}
                 >
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                  </Switch.Content>
                 </Switch>
               </SettingItem>
               <SettingItem title="显示应用名称" {...settingItemProps} divider>
                 <Switch
                   aria-label="显示应用名称"
-                  isSelected={displayAppName}
+                  isSelected={Boolean(displayAppName)}
                   onChange={(v) => {
-                    patchAppConfig({ displayAppName: v })
+                    patchAppConfig({ displayAppName: toBoolean(v) })
                   }}
                 >
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                  </Switch.Content>
                 </Switch>
               </SettingItem>
               <SettingItem title="进程归类" {...settingItemProps} divider>
                 <Switch
                   aria-label="进程归类"
-                  isSelected={connectionGroupByProcess}
+                  isSelected={Boolean(connectionGroupByProcess)}
                   onChange={(v) => {
-                    patchAppConfig({ connectionGroupByProcess: v })
+                    patchAppConfig({ connectionGroupByProcess: toBoolean(v) })
                   }}
                 >
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                  </Switch.Content>
                 </Switch>
               </SettingItem>
               {connectionGroupByProcess && (

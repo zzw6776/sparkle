@@ -1,6 +1,6 @@
 import { getControledMihomoConfig } from './controledMihomo'
 import { mihomoProfileWorkDir, mihomoWorkDir, profileConfigPath, profilePath } from '../utils/dirs'
-import { addProfileUpdater, delProfileUpdater } from '../core/profileUpdater'
+import { addProfileUpdater, delProfileUpdater, normalizeInterval } from '../core/profileUpdater'
 import { readFile, writeFile, rm, mkdir } from 'fs/promises'
 import { fileToStr } from '@uruhalushia/sparkle-native'
 import { restartCore } from '../core/manager'
@@ -73,6 +73,10 @@ export async function updateProfileItem(item: ProfileItem): Promise<void> {
   const oldItem = config.items[index]
   const shouldRewriteProfile =
     oldItem.ageRecipient !== item.ageRecipient || oldItem.ageIdentity !== item.ageIdentity
+  const shouldRestartCurrent =
+    config.current === item.id &&
+    (shouldRewriteProfile ||
+      JSON.stringify(oldItem.override || []) !== JSON.stringify(item.override || []))
   let profileContent: string | undefined
 
   if (shouldRewriteProfile && existsSync(profilePath(item.id))) {
@@ -85,19 +89,35 @@ export async function updateProfileItem(item: ProfileItem): Promise<void> {
   }
 
   config.items[index] = item
-  if (!item.autoUpdate) await delProfileUpdater(item.id)
   await setProfileConfig(config)
 
   if (profileContent !== undefined) {
     await writeProfileContent(item.id, profileContent, item, false)
   }
+
+  if (shouldRestartCurrent) {
+    await restartCore()
+  }
+
+  if (item.type === 'remote' && item.interval && item.autoUpdate !== false) {
+    await addProfileUpdater(item)
+  } else {
+    await delProfileUpdater(item.id)
+  }
 }
 
 export async function addProfileItem(item: Partial<ProfileItem>): Promise<void> {
+  const isExisting = Boolean(item.id && (await getProfileItem(item.id)))
   const newItem = await createProfile(item)
   const config = await getProfileConfig()
-  if (await getProfileItem(newItem.id)) {
-    await updateProfileItem(newItem)
+
+  if (isExisting) {
+    const index = config.items.findIndex((i) => i.id === newItem.id)
+    if (index !== -1) {
+      config.items[index] = newItem
+    } else {
+      config.items.push(newItem)
+    }
   } else {
     config.items.push(newItem)
   }
@@ -105,8 +125,15 @@ export async function addProfileItem(item: Partial<ProfileItem>): Promise<void> 
 
   if (!config.current) {
     await changeCurrentProfile(newItem.id)
+  } else if (config.current === newItem.id && (newItem as ProfileItem & { _contentChanged?: boolean })._contentChanged) {
+    await restartCore()
   }
-  await addProfileUpdater(newItem)
+
+  if (newItem.type === 'remote' && newItem.interval && newItem.autoUpdate !== false) {
+    await addProfileUpdater(newItem)
+  } else {
+    await delProfileUpdater(newItem.id)
+  }
 }
 
 export async function removeProfileItem(id: string): Promise<void> {
@@ -141,30 +168,34 @@ export async function getCurrentProfileItem(): Promise<ProfileItem> {
 
 export async function createProfile(item: Partial<ProfileItem>): Promise<ProfileItem> {
   const id = item.id || new Date().getTime().toString(16)
+  const existingItem = item.id ? await getProfileItem(item.id) : undefined
   const newItem = {
     id,
-    name: item.name || (item.type === 'remote' ? 'Remote File' : 'Local File'),
-    type: item.type,
-    url: item.url,
-    fingerprint: item.fingerprint,
-    ua: item.ua,
-    verify: item.verify ?? false,
-    autoUpdate: item.autoUpdate ?? true,
-    substore: item.substore || false,
-    interval: item.interval || 0,
-    override: item.override || [],
-    useProxy: item.useProxy || false,
-    ageRecipient: item.ageRecipient?.trim() || undefined,
-    ageIdentity: item.ageIdentity?.trim() || undefined,
+    name: item.name || existingItem?.name || (item.type === 'remote' ? 'Remote File' : 'Local File'),
+    type: item.type || existingItem?.type,
+    url: item.url || existingItem?.url,
+    fingerprint: item.fingerprint ?? existingItem?.fingerprint,
+    ua: item.ua ?? existingItem?.ua,
+    verify: item.verify ?? existingItem?.verify ?? false,
+    autoUpdate: item.autoUpdate ?? existingItem?.autoUpdate ?? true,
+    substore: item.substore ?? existingItem?.substore ?? false,
+    interval: normalizeInterval(item.interval ?? existingItem?.interval ?? 0),
+    override: item.override || existingItem?.override || [],
+    useProxy: item.useProxy ?? existingItem?.useProxy ?? false,
+    ageRecipient: item.ageRecipient?.trim() || existingItem?.ageRecipient?.trim() || undefined,
+    ageIdentity: item.ageIdentity?.trim() || existingItem?.ageIdentity?.trim() || undefined,
     updated: new Date().getTime()
   } as ProfileItem
+
+  let isContentChanged = false
+
   switch (newItem.type) {
     case 'remote': {
       const { 'mixed-port': mixedPort = 7890 } = await getControledMihomoConfig()
-      if (!item.url) throw new Error('Empty URL')
+      if (!newItem.url) throw new Error('Empty URL')
       let res: AxiosResponse
       if (newItem.substore) {
-        const urlObj = new URL(`http://127.0.0.1:${subStorePort}${item.url}`)
+        const urlObj = new URL(`http://127.0.0.1:${subStorePort}${newItem.url}`)
         urlObj.searchParams.set('target', 'ClashMeta')
         urlObj.searchParams.set('noCache', 'true')
         if (newItem.useProxy && mixedPort != 0) {
@@ -180,17 +211,17 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
         })
       } else {
         try {
-          const httpsAgent = new https.Agent({ rejectUnauthorized: !item.fingerprint })
+          const httpsAgent = new https.Agent({ rejectUnauthorized: !newItem.fingerprint })
 
-          if (item.fingerprint) {
-            const expected = item.fingerprint.replace(/:/g, '').toUpperCase()
+          if (newItem.fingerprint) {
+            const expected = newItem.fingerprint.replace(/:/g, '').toUpperCase()
             const verify = (s: tls.TLSSocket) => {
               if (getCertFingerprint(s.getPeerCertificate()) !== expected)
                 s.destroy(new Error('证书指纹不匹配'))
             }
 
             if (newItem.useProxy && mixedPort != 0) {
-              const urlObj = new URL(item.url)
+              const urlObj = new URL(newItem.url)
               const hostname = urlObj.hostname
               const port = urlObj.port || '443'
               httpsAgent.createConnection = (_, cb) => {
@@ -230,11 +261,11 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
             }
           }
 
-          res = await axios.get(item.url, {
+          res = await axios.get(newItem.url, {
             httpsAgent,
             ...(newItem.useProxy &&
               mixedPort &&
-              !item.fingerprint && {
+              !newItem.fingerprint && {
                 proxy: { protocol: 'http', host: '127.0.0.1', port: mixedPort }
               }),
             headers: { 'User-Agent': newItem.ua || (await getUserAgent()) },
@@ -243,13 +274,13 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
         } catch (error) {
           if (axios.isAxiosError(error)) {
             if (error.code === 'ECONNRESET' || error.code === 'ECONNABORTED') {
-              throw new Error(`网络连接被重置或超时：${item.url}`)
+              throw new Error(`网络连接被重置或超时：${newItem.url}`)
             } else if (error.code === 'CERT_HAS_EXPIRED') {
-              throw new Error(`服务器证书已过期：${item.url}`)
+              throw new Error(`服务器证书已过期：${newItem.url}`)
             } else if (error.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
-              throw new Error(`无法验证服务器证书：${item.url}`)
+              throw new Error(`无法验证服务器证书：${newItem.url}`)
             } else if (error.message.includes('Certificate verification failed')) {
-              throw new Error(`证书验证失败：${item.url}`)
+              throw new Error(`证书验证失败：${newItem.url}`)
             } else {
               throw new Error(`请求失败：${error.message}`)
             }
@@ -275,10 +306,14 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
       const intervalKey = Object.keys(headers).find((k) =>
         k.toLowerCase().endsWith('profile-update-interval')
       )
-      if (intervalKey) {
-        newItem.interval = parseInt(headers[intervalKey]) * 60
-        if (newItem.interval) {
-          newItem.locked = true
+      if (intervalKey && !newItem.interval) {
+        const remoteInterval = parseInt(headers[intervalKey])
+        if (remoteInterval > 0) {
+          if (remoteInterval >= 3600) {
+            newItem.interval = normalizeInterval(Math.round(remoteInterval / 60))
+          } else {
+            newItem.interval = normalizeInterval(remoteInterval * 60)
+          }
         }
       }
       const userinfoKey = Object.keys(headers).find((k) =>
@@ -294,15 +329,43 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
           throw new Error('订阅格式错误，无法解析为有效的配置文件\n' + (error as Error).message)
         }
       }
-      await setProfileStr(id, data, newItem)
+
+      let oldData: string | undefined
+      if (existsSync(profilePath(id))) {
+        try {
+          const raw = await readFile(profilePath(id), 'utf-8')
+          oldData = await decryptProfileContent(raw, existingItem || newItem)
+        } catch {
+          // ignore
+        }
+      }
+
+      isContentChanged = !oldData || oldData !== data
+      if (isContentChanged) {
+        await writeProfileContent(id, data, newItem, false)
+      }
       break
     }
     case 'local': {
       const data = await decryptProfileContent(item.file || '', newItem)
-      await setProfileStr(id, data, newItem)
+      let oldData: string | undefined
+      if (existsSync(profilePath(id))) {
+        try {
+          const raw = await readFile(profilePath(id), 'utf-8')
+          oldData = await decryptProfileContent(raw, existingItem || newItem)
+        } catch {
+          // ignore
+        }
+      }
+      isContentChanged = !oldData || oldData !== data
+      if (isContentChanged) {
+        await writeProfileContent(id, data, newItem, false)
+      }
       break
     }
   }
+
+  ;(newItem as ProfileItem & { _contentChanged?: boolean })._contentChanged = isContentChanged
   return newItem
 }
 

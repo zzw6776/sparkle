@@ -1,0 +1,113 @@
+name: Rolling
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Target release tag'
+        required: true
+        default: rolling
+        type: string
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - 'README.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/workflows/issues.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rolling
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Determine Target Tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          TAG=${INPUT_TAG:-rolling}
+          git check-ref-format "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [prepare]
+    uses: ./.github/workflows/build.yml
+    with:
+      channel: rolling
+      release_tag: ${{ needs.prepare.outputs.tag }}
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: bin/
+          merge-multiple: true
+
+      - name: Publish private draft release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_tag="sparkle-ci-build-${GITHUB_RUN_NUMBER}"
+
+          shopt -s nullglob
+          release_files=(bin/dist/*)
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "Release packages were not downloaded." >&2
+            exit 1
+          fi
+          if [ -s bin/latest.yml ]; then
+            release_files+=(bin/latest.yml)
+          fi
+          if [ ! -s bin/changelog.md ]; then
+            echo "Release changelog was not downloaded." >&2
+            exit 1
+          fi
+
+          gh release create "$release_tag" "${release_files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Sparkle CI build #${GITHUB_RUN_NUMBER}" \
+            --notes-file bin/changelog.md \
+            --draft
+
+          # Draft assets are visible only to repository collaborators. Removing
+          # the generated tag also keeps this CI-only build out of the public tag list.
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/${release_tag}" \
+            --silent || true
+
+          mapfile -t stale_drafts < <(
+            gh release list \
+              --repo "$GITHUB_REPOSITORY" \
+              --limit 1000 \
+              --json tagName,isDraft,createdAt \
+              --jq 'map(select(.isDraft and (.tagName | startswith("sparkle-ci-build-")))) | sort_by(.createdAt) | reverse | .[10:] | .[].tagName'
+          )
+          for stale_draft in "${stale_drafts[@]}"; do
+            gh release delete "$stale_draft" --repo "$GITHUB_REPOSITORY" --yes || true
+          done
+
+  aur:
+    if: github.repository == 'xishang0128/sparkle' && needs.prepare.outputs.tag == 'rolling'
+    needs: [prepare, publish]
+    uses: ./.github/workflows/aur.yml
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

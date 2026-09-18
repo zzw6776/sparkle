@@ -15,7 +15,19 @@ export interface AppNotificationPayload {
   onClose?: () => void
 }
 
+export interface AppNotificationDetail {
+  title: string
+  body: string
+}
+
+type ErrorDetailHandler = (detail: AppNotificationDetail) => void
+
 const toastKeys = new Map<string, string>()
+let errorDetailHandler: ErrorDetailHandler | null = null
+
+export function setErrorDetailHandler(handler: ErrorDetailHandler | null): void {
+  errorDetailHandler = handler
+}
 
 interface AppNotificationOptions extends Omit<AppNotificationPayload, 'title'> {
   forceToast?: boolean
@@ -36,10 +48,19 @@ export function showToastNotification(payload: AppNotificationPayload): void {
     }
   }
 
+  const errorDetailAction =
+    payload.variant === 'danger' && body
+      ? {
+          children: '查看详情',
+          onPress: () => errorDetailHandler?.({ title, body })
+        }
+      : undefined
+
   let key = ''
   key = toast(title, {
     actionProps:
       payload.actionProps ??
+      errorDetailAction ??
       (payload.url
         ? {
             children: '打开',
@@ -92,12 +113,18 @@ async function showNotification(
     body: payload.body,
     requireInteraction: payload.persistent
   })
-  notification.onclick = payload.url
-    ? () => {
-        window.open(payload.url, '_blank', 'noopener,noreferrer')
-        notification.close()
-      }
-    : null
+  notification.onclick =
+    payload.variant === 'danger' && payload.body
+      ? () => {
+          window.electron.ipcRenderer.send('app-notification-detail', payload.title, payload.body)
+          notification.close()
+        }
+      : payload.url
+        ? () => {
+            window.open(payload.url, '_blank', 'noopener,noreferrer')
+            notification.close()
+          }
+        : null
   notification.onclose = payload.onClose ?? null
 }
 

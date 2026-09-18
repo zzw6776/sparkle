@@ -3,12 +3,9 @@
 <h3 align="center">Another <a href="https://github.com/MetaCubeX/mihomo">Mihomo</a> GUI</h3>
 
 <p align="center">
-  <a href="https://github.com/xishang0128/sparkle/releases">
-    <img src="https://img.shields.io/github/release/xishang0128/sparkle/all.svg">
-  </a>
-  <a href="https://t.me/+y7rcYjEKIiI1NzZl">
-    <img src="https://img.shields.io/badge/Telegram-Group-blue?logo=telegram">
-  </a>
+  <a href="https://github.com/xishang0128/sparkle/releases/latest"><img src="https://img.shields.io/github/v/release/xishang0128/sparkle?label=latest"></a>
+  <a href="https://github.com/xishang0128/sparkle/releases/tag/rolling"><img src="https://img.shields.io/badge/-rolling-orange"></a>
+  <a href="https://t.me/+y7rcYjEKIiI1NzZl"><img src="https://img.shields.io/badge/Telegram-Group-blue?logo=telegram"></a>
 </p>
 
 ## 特性
@@ -163,6 +160,20 @@ pnpm build:mac
 pnpm build:linux
 ```
 
+**Linux 系统内核构建：**
+
+```bash
+export SPARKLE_SYSTEM_CORE=1
+# 可选：默认值为 /usr/bin/sparkle-service
+export SPARKLE_SYSTEM_SERVICE=/usr/bin/sparkle-service
+pnpm install
+pnpm build:linux
+```
+
+`SPARKLE_SYSTEM_CORE=1` 默认使用 `/usr/bin/mihomo`，也可指定绝对路径；服务默认使用 `/usr/bin/sparkle-service`。
+
+此模式不下载或打包外部资源，也不引用项目的 pre/postinstall（electron-builder 默认脚本除外）。资源由发行版拆分包提供；服务仅保留连接和初始化，生命周期交由 init 系统管理。
+
 **指定架构：**
 
 ```bash
@@ -240,10 +251,10 @@ node --version
 
 ## Star History
 
-<a href="https://www.star-history.com/#xishang0128/sparkle&Date">
+<a href="https://www.star-history.com/?repos=xishang0128/sparkle&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xishang0128/sparkle&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xishang0128/sparkle&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xishang0128/sparkle&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xishang0128/sparkle&type=date&theme=dark&legend=top-left&sealed_token=8SxlRPbsElPsEs9Q_QZ1jaPSZ9Q5E8UAgzHopZ03eHbfFl-j7100-bjDDbbBm8YN5oxxkqEZ_9Mhx7Xc1wnzSyI9pduKkTQReWJaOyZnN3Q38CBRuQlYnDo4kkx7ExoYdyzZgiZo9_IAMeuRLxPozFwu-clyQSZ9oSxBvD8Ldxe8TzMJeY7x-onoQY7Y" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xishang0128/sparkle&type=date&legend=top-left&sealed_token=8SxlRPbsElPsEs9Q_QZ1jaPSZ9Q5E8UAgzHopZ03eHbfFl-j7100-bjDDbbBm8YN5oxxkqEZ_9Mhx7Xc1wnzSyI9pduKkTQReWJaOyZnN3Q38CBRuQlYnDo4kkx7ExoYdyzZgiZo9_IAMeuRLxPozFwu-clyQSZ9oSxBvD8Ldxe8TzMJeY7x-onoQY7Y" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xishang0128/sparkle&type=date&legend=top-left&sealed_token=8SxlRPbsElPsEs9Q_QZ1jaPSZ9Q5E8UAgzHopZ03eHbfFl-j7100-bjDDbbBm8YN5oxxkqEZ_9Mhx7Xc1wnzSyI9pduKkTQReWJaOyZnN3Q38CBRuQlYnDo4kkx7ExoYdyzZgiZo9_IAMeuRLxPozFwu-clyQSZ9oSxBvD8Ldxe8TzMJeY7x-onoQY7Y" />
  </picture>
 </a>

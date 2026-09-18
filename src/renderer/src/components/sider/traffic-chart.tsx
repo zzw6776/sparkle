@@ -10,28 +10,66 @@ export interface TrafficChartHandle {
 
 const viewBoxWidth = 100
 const viewBoxHeight = 100
-const chartTop = 48
+const chartTop = 50
 
-function createAreaPath(data: number[]): string {
-  if (data.length === 0) return `M 0 ${viewBoxHeight} L ${viewBoxWidth} ${viewBoxHeight} Z`
+interface Point {
+  x: number
+  y: number
+}
 
-  const maxTraffic = Math.max(1, ...data)
-  const pointCount = data.length
-  const points = data.map((traffic, index) => ({
-    x: pointCount === 1 ? viewBoxWidth : (index / (pointCount - 1)) * viewBoxWidth,
-    y: viewBoxHeight - (Math.max(0, traffic) / maxTraffic) * (viewBoxHeight - chartTop)
+function sign(value: number): number {
+  return value < 0 ? -1 : 1
+}
+
+// Steffen monotone interpolation, matching the curve used by Recharts for `type="monotone"`.
+function createMonotoneAreaPath(values: number[]): string {
+  const maxTraffic = Math.max(...values, 1)
+  const points: Point[] = values.map((traffic, index) => ({
+    x: (index / (values.length - 1)) * 100,
+    y: 100 - (traffic / maxTraffic) * 50
   }))
-
-  let path = `M 0 ${viewBoxHeight} L ${points[0].x} ${points[0].y}`
-
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]
-    const current = points[index]
-    const controlX = (previous.x + current.x) / 2
-    path += ` C ${controlX} ${previous.y}, ${controlX} ${current.y}, ${current.x} ${current.y}`
+  if (points.length === 2) {
+    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y} L 100 100 L 0 100 Z`
   }
+  const slopes = points.slice(1).map((point, index) => {
+    const previous = points[index]
+    return (point.y - previous.y) / (point.x - previous.x)
+  })
+  const tangents = points.map((_, index) => {
+    if (index === 0 || index === points.length - 1) return 0
 
-  return `${path} L ${viewBoxWidth} ${viewBoxHeight} Z`
+    const previousWidth = points[index].x - points[index - 1].x
+    const nextWidth = points[index + 1].x - points[index].x
+    const previousSlope = slopes[index - 1]
+    const nextSlope = slopes[index]
+    const weightedSlope =
+      (previousSlope * nextWidth + nextSlope * previousWidth) / (previousWidth + nextWidth)
+    return (
+      (sign(previousSlope) + sign(nextSlope)) *
+        Math.min(Math.abs(previousSlope), Math.abs(nextSlope), 0.5 * Math.abs(weightedSlope)) || 0
+    )
+  })
+  tangents[0] = (3 * slopes[0] - tangents[1]) / 2
+  tangents[tangents.length - 1] =
+    (3 * slopes[slopes.length - 1] - tangents[tangents.length - 2]) / 2
+  const curve = points
+    .slice(1)
+    .map((point, index) => {
+      const previous = points[index]
+      const width = point.x - previous.x
+      return [
+        'C',
+        previous.x + width / 3,
+        previous.y + (tangents[index] * width) / 3,
+        point.x - width / 3,
+        point.y - (tangents[index + 1] * width) / 3,
+        point.x,
+        point.y
+      ].join(' ')
+    })
+    .join(' ')
+
+  return `M ${points[0].x} ${points[0].y} ${curve} L 100 100 L 0 100 Z`
 }
 
 const TrafficChart = React.forwardRef<TrafficChartHandle, TrafficChartProps>(function TrafficChart(
@@ -41,7 +79,7 @@ const TrafficChart = React.forwardRef<TrafficChartHandle, TrafficChartProps>(fun
   const gradientId = `traffic-gradient-${useId().replaceAll(':', '')}`
   const trafficRef = useRef(Array<number>(10).fill(0))
   const pathRef = useRef<SVGPathElement>(null)
-  const initialAreaPath = useMemo(() => createAreaPath(trafficRef.current), [])
+  const initialAreaPath = useMemo(() => createMonotoneAreaPath(trafficRef.current), [])
   const chartColor = isActive
     ? 'hsl(var(--heroui-primary-foreground))'
     : 'hsl(var(--heroui-foreground))'
@@ -53,7 +91,7 @@ const TrafficChart = React.forwardRef<TrafficChartHandle, TrafficChartProps>(fun
         const values = trafficRef.current
         values.copyWithin(0, 1)
         values[values.length - 1] = Math.max(0, traffic)
-        pathRef.current?.setAttribute('d', createAreaPath(values))
+        pathRef.current?.setAttribute('d', createMonotoneAreaPath(values))
       }
     }),
     []

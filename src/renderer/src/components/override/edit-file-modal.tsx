@@ -4,8 +4,11 @@ import React, { useEffect, useState } from 'react'
 import { BaseEditor } from '../base/base-editor-lazy'
 import { getOverride, restartCore, setOverride } from '@renderer/utils/ipc'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
+import { useOverrideConfig } from '@renderer/hooks/use-override-config'
+import { useProfileConfig } from '@renderer/hooks/use-profile-config'
 import ConfirmModal from '../base/base-confirm'
 import { notify } from '@renderer/utils/notification'
+import { isOverrideUsedByCurrentProfile } from '@renderer/utils/override'
 
 interface Props {
   id: string
@@ -16,6 +19,8 @@ interface Props {
 const EditFileModal: React.FC<Props> = (props) => {
   const { id, language, onClose } = props
   useAppConfig()
+  const { overrideConfig } = useOverrideConfig()
+  const { profileConfig } = useProfileConfig()
   const [currData, setCurrData] = useState('')
   const [originalData, setOriginalData] = useState('')
   const [isLoading, setIsLoading] = useState(true)
@@ -89,19 +94,19 @@ const EditFileModal: React.FC<Props> = (props) => {
               <div className="flex items-center space-x-2">
                 <Switch size="sm" isSelected={isDiff} onChange={setIsDiff}>
                   <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
                     <Label>显示修改</Label>
                   </Switch.Content>
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
                 </Switch>
                 <Switch size="sm" isSelected={sideBySide} onChange={setSideBySide}>
                   <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
                     <Label>侧边显示</Label>
                   </Switch.Content>
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
                 </Switch>
               </div>
               <div className="flex gap-2">
@@ -114,7 +119,10 @@ const EditFileModal: React.FC<Props> = (props) => {
                   onPress={async () => {
                     try {
                       await setOverride(id, language === 'javascript' ? 'js' : 'yaml', currData)
-                      await restartCore()
+                      const overrideItem = overrideConfig?.items?.find((i) => i.id === id)
+                      if (isOverrideUsedByCurrentProfile(profileConfig, id, overrideItem?.global)) {
+                        await restartCore()
+                      }
                       onClose()
                     } catch (e) {
                       notify(e, { variant: 'danger' })

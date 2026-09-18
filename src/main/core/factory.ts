@@ -1,7 +1,6 @@
 import {
   getControledMihomoConfig,
   getProfileConfig,
-  getProfile,
   getProfileStr,
   getProfileItem,
   getOverride,
@@ -45,7 +44,12 @@ interface RuntimeTestPorts {
 }
 
 export async function generateProfile(options: GenerateProfileOptions = {}): Promise<void> {
-  const { current } = await getProfileConfig()
+  const [profileConfig, appConfig, controledMihomoConfig] = await Promise.all([
+    getProfileConfig(),
+    getAppConfig(),
+    getControledMihomoConfig()
+  ])
+  const { current } = profileConfig
   const {
     diffWorkDir = false,
     controlDns = true,
@@ -53,13 +57,14 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
     autoSetDNSMode = 'none',
     speedTestPort = 17891,
     testChannelCapacity
-  } = await getAppConfig()
-  const currentProfileConfig = await getProfile(current)
-  rawProfileStr = await getProfileStr(current)
+  } = appConfig
+  const nextRawProfileStr = await getProfileStr(current)
+  let currentProfileConfig = parseYaml<MihomoConfig>(nextRawProfileStr)
+  if (typeof currentProfileConfig !== 'object') currentProfileConfig = {} as MihomoConfig
+  rawProfileStr = nextRawProfileStr
   currentProfileStr = stringifyYaml(currentProfileConfig)
   const currentProfile = await overrideProfile(current, currentProfileConfig)
   overrideProfileStr = stringifyYaml(currentProfile)
-  const controledMihomoConfig = await getControledMihomoConfig()
 
   const configToMerge = JSON.parse(JSON.stringify(controledMihomoConfig))
   if (!controlDns) {
@@ -71,6 +76,11 @@ export async function generateProfile(options: GenerateProfileOptions = {}): Pro
   }
 
   const profile = deepMerge(JSON.parse(JSON.stringify(currentProfile)), configToMerge)
+
+  if (controlDns && profile.dns) {
+    profile.dns['proxy-server-nameserver-policy'] =
+      configToMerge.dns?.['proxy-server-nameserver-policy'] ?? {}
+  }
 
   configureDevelopmentIsolation(profile)
   configureSystemDNSListener(profile, autoSetDNSMode)

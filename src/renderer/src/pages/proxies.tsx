@@ -6,11 +6,12 @@ import { getImageDataURL, mihomoChangeProxy, mihomoCloseConnections } from '@ren
 import { FaLocationCrosshairs } from 'react-icons/fa6'
 import {
   memo,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useCallback,
   useSyncExternalStore,
   type ReactNode
 } from 'react'
@@ -286,6 +287,7 @@ const Proxies: React.FC = () => {
   const scrollerElRef = useRef<HTMLElement | null>(null)
   const rememberProxyGroupOpenStateRef = useRef(rememberProxyGroupOpenState)
   rememberProxyGroupOpenStateRef.current = rememberProxyGroupOpenState
+  const previousGroupsRef = useRef(groups)
 
   const scrollerRef = useCallback((el: Window | HTMLElement | null) => {
     if (scrollerElRef.current) {
@@ -305,29 +307,39 @@ const Proxies: React.FC = () => {
     }
   }, [])
 
-  useEffect(() => {
-    const openUpdater = (prev: boolean[]): boolean[] => {
-      if (prev.length === groups.length) return prev
-      if (
-        rememberProxyGroupOpenStateRef.current &&
-        Object.keys(proxyGroupPageCache.isOpen).length > 0
-      ) {
-        return groups.map((group) => proxyGroupPageCache.isOpen[group.name] ?? false)
-      }
-      return groups.map((_, index) => prev[index] ?? false)
+  useLayoutEffect(() => {
+    const previousGroups = previousGroupsRef.current
+    previousGroupsRef.current = groups
+    if (
+      previousGroups.length === groups.length &&
+      previousGroups.every((group, index) => group.name === groups[index].name)
+    ) {
+      return
     }
-    setIsOpen(openUpdater)
-    setIsOpenContent(openUpdater)
-    setSearchValue((prev) => {
-      if (prev.length === groups.length) return prev
-      if (
-        rememberProxyGroupOpenStateRef.current &&
-        Object.keys(proxyGroupPageCache.searchValue).length > 0
-      ) {
-        return groups.map((group) => proxyGroupPageCache.searchValue[group.name] ?? '')
-      }
-      return groups.map((_, index) => prev[index] ?? '')
-    })
+
+    const remapByGroupName = <T,>(
+      prev: T[],
+      getFallback: (group: ControllerMixedGroup) => T
+    ): T[] => {
+      const previousValues = new Map(
+        previousGroups.map((group, index) => [group.name, prev[index]] as const)
+      )
+      return groups.map((group) => previousValues.get(group.name) ?? getFallback(group))
+    }
+
+    const getOpenFallback = (group: ControllerMixedGroup): boolean =>
+      rememberProxyGroupOpenStateRef.current
+        ? (proxyGroupPageCache.isOpen[group.name] ?? false)
+        : false
+    setIsOpen((prev) => remapByGroupName(prev, getOpenFallback))
+    setIsOpenContent((prev) => remapByGroupName(prev, getOpenFallback))
+    setSearchValue((prev) =>
+      remapByGroupName(prev, (group) =>
+        rememberProxyGroupOpenStateRef.current
+          ? (proxyGroupPageCache.searchValue[group.name] ?? '')
+          : ''
+      )
+    )
   }, [groups])
 
   const { groupCounts, allProxies } = useMemo(() => {

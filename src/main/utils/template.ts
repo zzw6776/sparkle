@@ -1,14 +1,18 @@
 import os from 'os'
 import { is } from '@electron-toolkit/utils'
+import { systemCoreDefaultPath, systemCoreOnlyBuild } from '../../shared/build-flags'
 
 export const defaultConfig: AppConfig = {
-  core: 'mihomo',
+  core: systemCoreOnlyBuild ? 'system' : 'mihomo',
+  ...(systemCoreOnlyBuild ? { systemCorePath: systemCoreDefaultPath } : {}),
+  ...(systemCoreOnlyBuild ? { corePermissionMode: 'elevated' as const } : {}),
   updateChannel: 'stable',
   notificationMode: 'system',
   showUpdateButtonAfterNotification: true,
   silentStart: false,
   appTheme: 'system',
   useWindowFrame: false,
+  enableWindowDrag: false,
   proxyInTray: true,
   customTrayIcon: '',
   trayProxyDelayLayout: 'new-line',
@@ -64,6 +68,7 @@ export const defaultConfig: AppConfig = {
   showGroupSelectedProxy: false,
   autoLightweightMode: 'core',
   coreStartupMode: 'post-up',
+  serviceRunMode: 'auto',
   delayTestConcurrency: 50,
   delayTestUseGroupApi: false,
   delayTestUrlScope: 'group',

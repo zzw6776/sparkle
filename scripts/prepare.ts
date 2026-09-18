@@ -4,6 +4,7 @@ import path from 'path'
 import zlib from 'zlib'
 import { extract } from 'tar'
 import { execSync } from 'child_process'
+import { systemCoreOnlyBuild } from './build-env.ts'
 
 const cwd = process.cwd()
 const TEMP_DIR = path.join(cwd, 'node_modules/.temp')
@@ -491,6 +492,11 @@ const tasks: Task[] = [
     winOnly: true
   }
 ]
+
+if (systemCoreOnlyBuild) {
+  tasks.splice(0, 2)
+  console.log('[INFO]: System-core-only build: skipping mihomo downloads')
+}
 
 async function runTask() {
   const task = tasks.shift()

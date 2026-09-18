@@ -618,22 +618,12 @@ const Connections: React.FC = () => {
       if (grouped) {
         await patchAppConfig({
           connectionGroupSort: currentKey as
-            | 'name'
-            | 'count'
-            | 'upload'
-            | 'download'
-            | 'uploadSpeed'
-            | 'downloadSpeed'
+            'name' | 'count' | 'upload' | 'download' | 'uploadSpeed' | 'downloadSpeed'
         })
       } else {
         await patchAppConfig({
           connectionOrderBy: currentKey as
-            | 'time'
-            | 'upload'
-            | 'download'
-            | 'uploadSpeed'
-            | 'downloadSpeed'
-            | 'process'
+            'time' | 'upload' | 'download' | 'uploadSpeed' | 'downloadSpeed' | 'process'
         })
       }
     },
@@ -938,7 +928,14 @@ const Connections: React.FC = () => {
         />
       )
     },
-    [expandedGroups, toggleGroup, closeGroupStable, openProcessTest, pinnedProcessKeys, togglePinnedProcess]
+    [
+      expandedGroups,
+      toggleGroup,
+      closeGroupStable,
+      openProcessTest,
+      pinnedProcessKeys,
+      togglePinnedProcess
+    ]
   )
 
   return (
@@ -1165,9 +1162,7 @@ const Connections: React.FC = () => {
             isIconOnly
             className="bg-content2"
             aria-label={
-              (grouped ? connectionGroupDirection : connectionDirection) === 'asc'
-                ? '升序'
-                : '降序'
+              (grouped ? connectionGroupDirection : connectionDirection) === 'asc' ? '升序' : '降序'
             }
             onPress={handleDirectionToggle}
           >

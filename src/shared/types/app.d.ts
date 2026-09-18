@@ -1,8 +1,10 @@
 interface AppVersion {
   version: string
+  tag?: string
   changelog: string
 }
 
+type AppUpdateChannel = 'stable' | 'rolling'
 type AppNotificationMode = 'system' | 'toast'
 type AppNotificationVariant = 'default' | 'accent' | 'success' | 'warning' | 'danger'
 type SpeedTestSource = 'cloudflare' | 'telegram' | 'custom'
@@ -326,12 +328,13 @@ interface IHost {
 }
 
 interface AppConfig {
-  updateChannel: 'stable' | 'beta'
+  updateChannel: AppUpdateChannel
   notificationMode?: AppNotificationMode
   showUpdateButtonAfterNotification?: boolean
   core: 'mihomo' | 'mihomo-alpha' | 'system'
   systemCorePath?: string
   corePermissionMode?: 'elevated' | 'service'
+  serviceRunMode?: 'auto' | 'sandbox' | 'direct'
   serviceAuthKey?: string
   disableLoopbackDetector: boolean
   disableEmbedCA: boolean
@@ -395,6 +398,7 @@ interface AppConfig {
   /** @deprecated Legacy DNS recovery value kept for configuration migration. */
   originDNS?: string
   useWindowFrame: boolean
+  enableWindowDrag: boolean
   proxyInTray: boolean
   trayProxyDelayLayout?: 'same-line' | 'new-line'
   siderOrder: string[]

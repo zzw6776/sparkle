@@ -413,9 +413,11 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                     patchAppConfig({ delayTestUseGroupApi: v })
                   }}
                 >
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                  </Switch.Content>
                 </Switch>
               </SettingItem>
               {!delayTestUseGroupApi && (

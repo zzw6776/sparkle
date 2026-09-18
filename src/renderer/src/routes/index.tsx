@@ -1,116 +1,101 @@
+import { useLayoutEffect, type ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
+import { markInitialContentPartReady } from '@renderer/utils/startup'
 import {
-  lazy,
-  Suspense,
-  type ComponentType,
-  type LazyExoticComponent,
-  type ReactElement
-} from 'react'
+  SpeedTest,
+  GeneralSpeedTest,
+  CodexTest,
+  ProcessTest,
+  Connections,
+  DNS,
+  Logs,
+  Mihomo,
+  Override,
+  Profiles,
+  Proxies,
+  Resources,
+  Rules,
+  Settings,
+  Sniffer,
+  SubStore,
+  Sysproxy,
+  Tun
+} from './route-pages'
 
-const Override = lazy(() => import('@renderer/pages/override'))
-const Proxies = lazy(() => import('@renderer/pages/proxies'))
-const Rules = lazy(() => import('@renderer/pages/rules'))
-const Settings = lazy(() => import('@renderer/pages/settings'))
-const Profiles = lazy(() => import('@renderer/pages/profiles'))
-const Logs = lazy(() => import('@renderer/pages/logs'))
-const Connections = lazy(() => import('@renderer/pages/connections'))
-const Mihomo = lazy(() => import('@renderer/pages/mihomo'))
-const Sysproxy = lazy(() => import('@renderer/pages/syspeoxy'))
-const Tun = lazy(() => import('@renderer/pages/tun'))
-const Resources = lazy(() => import('@renderer/pages/resources'))
-const DNS = lazy(() => import('@renderer/pages/dns'))
-const Sniffer = lazy(() => import('@renderer/pages/sniffer'))
-const SubStore = lazy(() => import('@renderer/pages/substore'))
-const SpeedTest = lazy(() => import('@renderer/pages/speed-test'))
-const CodexTest = lazy(() => import('@renderer/pages/codex-test'))
-const GeneralSpeedTest = lazy(() => import('@renderer/pages/general-speed-test'))
-const ProcessTest = lazy(() => import('@renderer/pages/process-test'))
+export { useDeferredRoutePreload } from './route-pages'
 
-function page(Component: LazyExoticComponent<ComponentType>): ReactElement {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-full items-center justify-center text-sm text-foreground-400">
-          正在加载…
-        </div>
-      }
-    >
-      <Component />
-    </Suspense>
-  )
+function StartupRoute({ children }: { children: ReactNode }): ReactNode {
+  useLayoutEffect(() => {
+    markInitialContentPartReady('route')
+  }, [])
+  return children
 }
+
+function startupRoute(element: ReactNode): ReactNode {
+  return <StartupRoute>{element}</StartupRoute>
+}
+
 const routes = [
+  { path: '/speed-test', element: startupRoute(<SpeedTest />) },
+  { path: '/speed-test/general', element: startupRoute(<GeneralSpeedTest />) },
+  { path: '/speed-test/codex', element: startupRoute(<CodexTest />) },
+  { path: '/speed-test/process', element: startupRoute(<ProcessTest />) },
+
   {
     path: '/mihomo',
-    element: page(Mihomo)
+    element: startupRoute(<Mihomo />)
   },
   {
     path: '/sysproxy',
-    element: page(Sysproxy)
+    element: startupRoute(<Sysproxy />)
   },
   {
     path: '/tun',
-    element: page(Tun)
+    element: startupRoute(<Tun />)
   },
   {
     path: '/proxies',
-    element: page(Proxies)
+    element: startupRoute(<Proxies />)
   },
   {
     path: '/rules',
-    element: page(Rules)
+    element: startupRoute(<Rules />)
   },
   {
     path: '/resources',
-    element: page(Resources)
+    element: startupRoute(<Resources />)
   },
   {
     path: '/dns',
-    element: page(DNS)
+    element: startupRoute(<DNS />)
   },
   {
     path: '/sniffer',
-    element: page(Sniffer)
+    element: startupRoute(<Sniffer />)
   },
   {
     path: '/logs',
-    element: page(Logs)
-  },
-  {
-    path: '/speed-test',
-    element: page(SpeedTest)
-  },
-  {
-    path: '/speed-test/general',
-    element: page(GeneralSpeedTest)
-  },
-  {
-    path: '/speed-test/codex',
-    element: page(CodexTest)
-  },
-  {
-    path: '/speed-test/process',
-    element: page(ProcessTest)
+    element: startupRoute(<Logs />)
   },
   {
     path: '/connections',
-    element: page(Connections)
+    element: startupRoute(<Connections />)
   },
   {
     path: '/override',
-    element: page(Override)
+    element: startupRoute(<Override />)
   },
   {
     path: '/profiles',
-    element: page(Profiles)
+    element: startupRoute(<Profiles />)
   },
   {
     path: '/settings',
-    element: page(Settings)
+    element: startupRoute(<Settings />)
   },
   {
     path: '/substore',
-    element: page(SubStore)
+    element: startupRoute(<SubStore />)
   },
   {
     path: '/',

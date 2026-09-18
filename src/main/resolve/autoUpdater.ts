@@ -18,9 +18,25 @@ import {
   pauseServiceFallbackForAppUpdate
 } from '../service/fallback'
 import { appendAppLog } from '../utils/log'
+import { systemCoreOnlyBuild } from '../../shared/build-flags'
 
 let downloadCancelToken: CancelTokenSource | null = null
 const WINDOWS_INSTALLER_MIN_TEMP_SPACE_BYTES = 1024 * 1024 * 1024
+const UPDATE_MANIFEST_URLS: Record<AppUpdateChannel, string> = {
+  stable: 'https://github.com/xishang0128/sparkle/releases/latest/download/latest.yml',
+  rolling: 'https://github.com/xishang0128/sparkle/releases/download/rolling/latest.yml'
+}
+
+function getGitHubAuthHeaders(token?: string): Record<string, string> {
+  const normalizedToken = token?.trim()
+  return normalizedToken ? { Authorization: `Bearer ${normalizedToken}` } : {}
+}
+
+function resolveReleaseTag(version: string, tag?: string): string {
+  if (tag) return tag
+  if (version.includes('-rolling-')) return 'rolling'
+  return version
+}
 
 async function ensureFreeSpace(dir: string, requiredBytes: number, message: string): Promise<void> {
   const stats = await statfs(dir)
@@ -34,13 +50,13 @@ async function ensureFreeSpace(dir: string, requiredBytes: number, message: stri
 
 export async function checkUpdate(): Promise<AppVersion | undefined> {
   const { 'mixed-port': mixedPort = 7890 } = await getControledMihomoConfig()
-  const { updateChannel = 'stable' } = await getAppConfig()
-  let url = 'https://github.com/xishang0128/sparkle/releases/latest/download/latest.yml'
-  if (updateChannel == 'beta') {
-    url = 'https://github.com/xishang0128/sparkle/releases/download/pre-release/latest.yml'
-  }
+  const { updateChannel = 'stable', githubToken } = await getAppConfig()
+  const url = UPDATE_MANIFEST_URLS[updateChannel]
   const res = await axios.get(url, {
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...getGitHubAuthHeaders(githubToken)
+    },
     ...(mixedPort != 0 && {
       proxy: {
         protocol: 'http',
@@ -82,7 +98,7 @@ async function ensureWindowsInstallerTempSpace(): Promise<void> {
   await ensureFreeSpace(tempDir, WINDOWS_INSTALLER_MIN_TEMP_SPACE_BYTES, '临时目录空间不足')
 }
 
-export async function downloadAndInstallUpdate(version: string): Promise<void> {
+export async function downloadAndInstallUpdate(version: string, tag?: string): Promise<void> {
   let appUpdateInstalling = false
   let sysProxyPaused = false
   const pauseSysProxy = async (): Promise<void> => {
@@ -100,10 +116,8 @@ export async function downloadAndInstallUpdate(version: string): Promise<void> {
     }
   }
   const { 'mixed-port': mixedPort = 7890 } = await getControledMihomoConfig()
-  let releaseTag = version
-  if (version.includes('beta')) {
-    releaseTag = 'pre-release'
-  }
+  const { githubToken } = await getAppConfig()
+  const releaseTag = resolveReleaseTag(version, tag)
   const baseUrl = `https://github.com/xishang0128/sparkle/releases/download/${releaseTag}/`
   const fileMap: Record<string, string> = {
     'win32-x64': `sparkle-windows-${version}-x64-setup.exe`,
@@ -122,7 +136,10 @@ export async function downloadAndInstallUpdate(version: string): Promise<void> {
 
   const apiUrl = `https://api.github.com/repos/xishang0128/sparkle/releases/tags/${releaseTag}`
   const apiRequestConfig: AxiosRequestConfig = {
-    headers: { Accept: 'application/vnd.github.v3+json' },
+    headers: {
+      Accept: 'application/vnd.github.v3+json',
+      ...getGitHubAuthHeaders(githubToken)
+    },
     ...(mixedPort != 0 && {
       proxy: {
         protocol: 'http',
@@ -162,7 +179,8 @@ export async function downloadAndInstallUpdate(version: string): Promise<void> {
           }
         }),
         headers: {
-          'Content-Type': 'application/octet-stream'
+          'Content-Type': 'application/octet-stream',
+          ...getGitHubAuthHeaders(githubToken)
         },
         cancelToken: downloadCancelToken.token,
         onDownloadProgress: (progressEvent) => {
@@ -202,7 +220,7 @@ export async function downloadAndInstallUpdate(version: string): Promise<void> {
       }).unref()
       appUpdateInstalling = true
     }
-    if (file.endsWith('.7z')) {
+    if (!systemCoreOnlyBuild && file.endsWith('.7z')) {
       await pauseSysProxy()
       await pauseServiceFallbackForAppUpdate()
       await stopServiceForPortableUpdate()

@@ -29,6 +29,7 @@ import EnvSetting from '@renderer/components/mihomo/env-setting'
 import AdvancedSetting from '@renderer/components/mihomo/advanced-settings'
 import LogSetting from '@renderer/components/mihomo/log-setting'
 import { notify } from '@renderer/utils/notification'
+import { systemCoreOnlyBuild } from '../../../shared/build-flags'
 
 let systemCorePathsCache: string[] | null = null
 let cachePromise: Promise<string[]> | null = null
@@ -58,6 +59,7 @@ const Mihomo: React.FC = () => {
   const {
     core = 'mihomo',
     corePermissionMode = 'elevated',
+    serviceRunMode = 'auto',
     coreStartupMode = 'post-up',
     mihomoCpuPriority = 'PRIORITY_NORMAL'
   } = appConfig || {}
@@ -141,7 +143,7 @@ const Mihomo: React.FC = () => {
 
   return (
     <BasePage title="内核设置" contentClassName="no-scrollbar">
-      {showPermissionModal && (
+      {!systemCoreOnlyBuild && showPermissionModal && (
         <PermissionModal
           onChange={setShowPermissionModal}
           onRevoke={async () => {
@@ -187,7 +189,7 @@ const Mihomo: React.FC = () => {
         />
       )}
       <SettingCard>
-        <SettingItem
+        {systemCoreOnlyBuild ? null : (<SettingItem
           compatKey="legacy"
           title="内核版本"
           actions={
@@ -220,7 +222,7 @@ const Mihomo: React.FC = () => {
             <SelectItem key="mihomo-alpha">内置预览版</SelectItem>
             <SelectItem key="system">使用系统内核</SelectItem>
           </Select>
-        </SettingItem>
+        </SettingItem>)}
         {core === 'system' && (
           <SettingItem compatKey="legacy" title="系统内核路径选择" divider>
             <Select
@@ -289,7 +291,20 @@ const Mihomo: React.FC = () => {
             <Tab key="service" title="系统服务" />
           </Tabs>
         </SettingItem>
-
+        {platform === 'linux' && corePermissionMode === 'service' && (
+          <SettingItem compatKey="legacy" title="服务核心运行方式" divider>
+            <Tabs
+              size="sm"
+              color="primary"
+              selectedKey={serviceRunMode}
+              onSelectionChange={(key) => handleConfigChangeWithRestart('serviceRunMode', key)}
+            >
+              <Tab key="auto" title="自动" />
+              <Tab key="sandbox" title="沙盒" />
+              <Tab key="direct" title="直接启动" />
+            </Tabs>
+          </SettingItem>
+        )}
         {corePermissionMode !== 'service' && (
           <SettingItem compatKey="legacy" title="启动检测方式" divider>
             <Tabs
@@ -303,11 +318,13 @@ const Mihomo: React.FC = () => {
             </Tabs>
           </SettingItem>
         )}
-        <SettingItem compatKey="legacy" title="提权状态" divider>
-          <Button size="sm" color="primary" onPress={() => setShowPermissionModal(true)}>
-            管理
-          </Button>
-        </SettingItem>
+        {!systemCoreOnlyBuild && (
+          <SettingItem compatKey="legacy" title="提权状态" divider>
+            <Button size="sm" color="primary" onPress={() => setShowPermissionModal(true)}>
+              管理
+            </Button>
+          </SettingItem>
+        )}
         <SettingItem compatKey="legacy" title="服务状态" divider>
           <Button size="sm" color="primary" onPress={() => setShowServiceModal(true)}>
             管理

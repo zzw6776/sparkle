@@ -66,11 +66,12 @@ const EditInfoModal: React.FC<Props> = (props) => {
   const onSave = async (): Promise<void> => {
     try {
       const normalizedInterval =
-        values.interval && values.interval > 0
+        values.autoUpdate && values.interval && values.interval > 0
           ? Math.min(35791, Math.max(1, values.interval))
           : 0
       const itemToSave = {
         ...values,
+        autoUpdate: Boolean(values.autoUpdate),
         interval: normalizedInterval,
         override: values.override?.filter(
           (i) =>

@@ -71,39 +71,50 @@ export async function updateProfileItem(item: ProfileItem): Promise<void> {
     throw new Error('Profile not found')
   }
 
+  const normalizedItem: ProfileItem = {
+    ...item,
+    autoUpdate: item.autoUpdate ?? true,
+    interval: item.autoUpdate === false ? 0 : normalizeInterval(item.interval)
+  }
+
   const oldItem = config.items[index]
   const shouldRewriteProfile =
-    oldItem.ageRecipient !== item.ageRecipient || oldItem.ageIdentity !== item.ageIdentity
+    oldItem.ageRecipient !== normalizedItem.ageRecipient ||
+    oldItem.ageIdentity !== normalizedItem.ageIdentity
   const shouldRestartCurrent =
-    config.current === item.id &&
+    config.current === normalizedItem.id &&
     (shouldRewriteProfile ||
-      JSON.stringify(oldItem.override || []) !== JSON.stringify(item.override || []))
+      JSON.stringify(oldItem.override || []) !== JSON.stringify(normalizedItem.override || []))
   let profileContent: string | undefined
 
-  if (shouldRewriteProfile && existsSync(profilePath(item.id))) {
-    const rawProfile = await readFile(profilePath(item.id), 'utf-8')
+  if (shouldRewriteProfile && existsSync(profilePath(normalizedItem.id))) {
+    const rawProfile = await readFile(profilePath(normalizedItem.id), 'utf-8')
     try {
       profileContent = await decryptProfileContent(rawProfile, oldItem)
     } catch {
-      profileContent = await decryptProfileContent(rawProfile, item)
+      profileContent = await decryptProfileContent(rawProfile, normalizedItem)
     }
   }
 
-  config.items[index] = item
+  config.items[index] = normalizedItem
   await setProfileConfig(config)
 
   if (profileContent !== undefined) {
-    await writeProfileContent(item.id, profileContent, item, false)
+    await writeProfileContent(normalizedItem.id, profileContent, normalizedItem, false)
   }
 
   if (shouldRestartCurrent) {
     await restartCore()
   }
 
-  if (item.type === 'remote' && item.interval && item.autoUpdate !== false) {
-    await addProfileUpdater(item)
+  if (
+    normalizedItem.type === 'remote' &&
+    normalizedItem.interval &&
+    normalizedItem.autoUpdate !== false
+  ) {
+    await addProfileUpdater(normalizedItem)
   } else {
-    await delProfileUpdater(item.id)
+    await delProfileUpdater(normalizedItem.id)
   }
 }
 
@@ -126,7 +137,10 @@ export async function addProfileItem(item: Partial<ProfileItem>): Promise<void> 
 
   if (!config.current) {
     await changeCurrentProfile(newItem.id)
-  } else if (config.current === newItem.id && (newItem as ProfileItem & { _contentChanged?: boolean })._contentChanged) {
+  } else if (
+    config.current === newItem.id &&
+    (newItem as ProfileItem & { _contentChanged?: boolean })._contentChanged
+  ) {
     await restartCore()
   }
 
@@ -170,17 +184,22 @@ export async function getCurrentProfileItem(): Promise<ProfileItem> {
 export async function createProfile(item: Partial<ProfileItem>): Promise<ProfileItem> {
   const id = item.id || new Date().getTime().toString(16)
   const existingItem = item.id ? await getProfileItem(item.id) : undefined
+  const autoUpdate = item.autoUpdate ?? existingItem?.autoUpdate ?? true
+  const initialInterval = autoUpdate
+    ? normalizeInterval(item.interval ?? existingItem?.interval ?? 0)
+    : 0
   const newItem = {
     id,
-    name: item.name || existingItem?.name || (item.type === 'remote' ? 'Remote File' : 'Local File'),
+    name:
+      item.name || existingItem?.name || (item.type === 'remote' ? 'Remote File' : 'Local File'),
     type: item.type || existingItem?.type,
     url: item.url || existingItem?.url,
     fingerprint: item.fingerprint ?? existingItem?.fingerprint,
     ua: item.ua ?? existingItem?.ua,
     verify: item.verify ?? existingItem?.verify ?? false,
-    autoUpdate: item.autoUpdate ?? existingItem?.autoUpdate ?? true,
+    autoUpdate,
     substore: item.substore ?? existingItem?.substore ?? false,
-    interval: normalizeInterval(item.interval ?? existingItem?.interval ?? 0),
+    interval: initialInterval,
     override: item.override || existingItem?.override || [],
     useProxy: item.useProxy ?? existingItem?.useProxy ?? false,
     ageRecipient: item.ageRecipient?.trim() || existingItem?.ageRecipient?.trim() || undefined,
@@ -310,7 +329,7 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
       const intervalKey = Object.keys(headers).find((k) =>
         k.toLowerCase().endsWith('profile-update-interval')
       )
-      if (intervalKey && !newItem.interval) {
+      if (newItem.autoUpdate !== false && intervalKey && !newItem.interval) {
         const remoteInterval = parseInt(headers[intervalKey])
         if (remoteInterval > 0) {
           if (remoteInterval >= 3600) {

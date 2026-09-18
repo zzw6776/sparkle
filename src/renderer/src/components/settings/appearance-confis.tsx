@@ -163,7 +163,7 @@ const AppearanceConfig: React.FC = () => {
             compatKey="legacy"
             title="自定义托盘图标"
             actions={
-              <Tooltip content="设置后托盘会使用此图标；开启网速显示时会与网速合成。PNG、JPG、WebP 会先裁剪后保存。">
+              <Tooltip content="设置后托盘将始终使用此图标；PNG、JPG、WebP 会先裁剪后保存。">
                 <Button isIconOnly size="sm" variant="light">
                   <IoIosHelpCircle className="text-lg" />
                 </Button>

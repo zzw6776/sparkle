@@ -24,7 +24,6 @@ import {
   ipcMain,
   Menu,
   nativeImage,
-  nativeTheme,
   screen,
   shell,
   Tray
@@ -44,8 +43,7 @@ export let tray: Tray | null = null
 export let customTrayWindow: BrowserWindow | null = null
 let trayMenu: Menu | null = null
 let updateTrayMenuListenerRegistered = false
-let lastTrafficTrayIcon: Electron.NativeImage | null = null
-let lastTrafficTrayIconSource = ''
+let lastTrafficTrayIcon: string | null = null
 let trafficCanvas: Canvas | null = null
 let canvasModulePromise: Promise<typeof import('@napi-rs/canvas')> | null = null
 let trafficFontFamily: 'SF Pro Text' | 'System Font' | 'Arial' | null = null
@@ -53,9 +51,7 @@ let trafficRenderSequence = 0
 type TrayImage = Electron.NativeImage | string
 const customTrayIconSize = 16
 const customTrayIconScaleFactors = [1, 1.25, 1.5, 2, 2.5, 3]
-const trafficTextWidth = 114
-const trafficIconGap = 12
-const trafficIconWidth = trafficTextWidth + trafficIconGap + 36
+const trafficIconWidth = 114
 const trafficIconHeight = 36
 const trafficHorizontalPadding = 2
 const sfProTextPath = '/System/Library/Fonts/SFNS.ttf'
@@ -128,22 +124,17 @@ function createCustomTrayImage(customTrayIcon: string): TrayImage | null {
   return createMultiScaleTrayImage(icon)
 }
 
-function createTrafficTrayImage(png: string, templateImage = true): Electron.NativeImage | null {
+function createTrafficTrayImage(png: string): Electron.NativeImage | null {
   const image = nativeImage.createFromDataURL(png).resize({ height: customTrayIconSize })
   if (image.isEmpty()) return null
 
-  image.setTemplateImage(templateImage)
+  image.setTemplateImage(true)
   return image
 }
 
-async function renderTrafficTrayIcon(
-  upload: number,
-  download: number,
-  customIcon: Electron.NativeImage | null
-): Promise<string> {
+async function renderTrafficTrayIcon(upload: number, download: number): Promise<string> {
   canvasModulePromise ??= import('@napi-rs/canvas')
-  const { createCanvas, GlobalFonts, loadImage } = await canvasModulePromise
-  const icon = await loadImage(customIcon ? customIcon.toPNG() : templateIcon)
+  const { createCanvas, GlobalFonts } = await canvasModulePromise
   if (!trafficFontFamily) {
     if (!GlobalFonts.has('SF Pro Text') && existsSync(sfProTextPath)) {
       GlobalFonts.registerFromPath(sfProTextPath, 'SF Pro Text')
@@ -167,23 +158,16 @@ async function renderTrafficTrayIcon(
   trafficCanvas ??= createCanvas(trafficIconWidth, trafficIconHeight)
   const context = trafficCanvas.getContext('2d')
   context.clearRect(0, 0, trafficIconWidth, trafficIconHeight)
-  context.fillStyle = customIcon && nativeTheme.shouldUseDarkColors ? '#fff' : '#000'
+  context.fillStyle = '#000'
   context.font = `700 18px "${trafficFontFamily}"`
   context.textBaseline = 'alphabetic'
   context.textAlign = 'left'
   context.fillText('↑', trafficHorizontalPadding, 15)
   context.fillText('↓', trafficHorizontalPadding, 34)
   context.textAlign = 'right'
-  const textRight = trafficTextWidth - trafficHorizontalPadding
+  const textRight = trafficIconWidth - trafficHorizontalPadding
   context.fillText(uploadText, textRight, 15)
   context.fillText(downloadText, textRight, 34)
-  context.drawImage(
-    icon,
-    trafficTextWidth + trafficIconGap,
-    0,
-    trafficIconHeight,
-    trafficIconHeight
-  )
   return trafficCanvas.toDataURL('image/png')
 }
 
@@ -192,26 +176,26 @@ export async function updateTrayTraffic(upload: number, download: number): Promi
 
   const { customTrayIcon = '', showTraffic = false } = await getAppConfig()
   const customIcon = createCustomTrayImage(customTrayIcon)
+  if (customIcon) {
+    trafficRenderSequence++
+    tray.setImage(customIcon)
+    return
+  }
   if (!showTraffic) {
     trafficRenderSequence++
     lastTrafficTrayIcon = null
-    tray.setImage(customIcon || createDarwinTrayIcon())
+    tray.setImage(createDarwinTrayIcon())
     trafficCanvas = null
     return
   }
 
   const sequence = ++trafficRenderSequence
-  const png = await renderTrafficTrayIcon(
-    upload,
-    download,
-    customIcon && typeof customIcon !== 'string' ? customIcon : null
-  )
+  const png = await renderTrafficTrayIcon(upload, download)
   if (sequence !== trafficRenderSequence) return
 
-  const image = createTrafficTrayImage(png, !customIcon)
+  const image = createTrafficTrayImage(png)
   if (!image) return
-  lastTrafficTrayIcon = image
-  lastTrafficTrayIconSource = customTrayIcon
+  lastTrafficTrayIcon = png
   tray.setImage(image)
 }
 
@@ -661,18 +645,7 @@ export async function createTray(): Promise<void> {
 export async function updateTrayIcon(): Promise<void> {
   if (!tray) return
 
-  const { customTrayIcon = '', showTraffic = false } = await getAppConfig()
-  trafficRenderSequence++
-  if (
-    process.platform === 'darwin' &&
-    showTraffic &&
-    lastTrafficTrayIcon &&
-    lastTrafficTrayIconSource === customTrayIcon
-  ) {
-    tray.setImage(lastTrafficTrayIcon)
-    return
-  }
-  lastTrafficTrayIcon = null
+  const { customTrayIcon = '' } = await getAppConfig()
   const customIcon = createCustomTrayImage(customTrayIcon)
   if (customIcon) {
     tray.setImage(customIcon)
@@ -680,7 +653,8 @@ export async function updateTrayIcon(): Promise<void> {
   }
 
   if (process.platform === 'darwin') {
-    tray.setImage(createDarwinTrayIcon())
+    const trafficIcon = lastTrafficTrayIcon ? createTrafficTrayImage(lastTrafficTrayIcon) : null
+    tray.setImage(trafficIcon || createDarwinTrayIcon())
     return
   }
   if (process.platform === 'win32') {

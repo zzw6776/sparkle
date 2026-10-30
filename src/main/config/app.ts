@@ -5,6 +5,7 @@ import { deepMerge } from '../utils/merge'
 import { defaultConfig } from '../utils/template'
 import { readFileSync, existsSync } from 'fs'
 import { systemCoreDefaultPath, systemCoreOnlyBuild } from '../../shared/build-flags'
+import { notifyConfigOperation } from '../resolve/webhook'
 
 let appConfig: AppConfig
 let writePromise: Promise<void> = Promise.resolve()
@@ -86,6 +87,7 @@ export async function patchAppConfig(patch: Partial<AppConfig>): Promise<AppConf
   })()
   writePromise = currentPromise.catch(() => {})
   await currentPromise
+  notifyConfigOperation('patchAppConfig', patch)
   return appConfig
 }
 

@@ -80,9 +80,7 @@ const TrafficChart = React.forwardRef<TrafficChartHandle, TrafficChartProps>(fun
   const trafficRef = useRef(Array<number>(10).fill(0))
   const pathRef = useRef<SVGPathElement>(null)
   const initialAreaPath = useMemo(() => createMonotoneAreaPath(trafficRef.current), [])
-  const chartColor = isActive
-    ? 'hsl(var(--heroui-primary-foreground))'
-    : 'hsl(var(--heroui-foreground))'
+  const chartColor = isActive ? 'var(--accent-foreground)' : 'var(--foreground)'
 
   useImperativeHandle(
     ref,

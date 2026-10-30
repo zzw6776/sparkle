@@ -1,18 +1,15 @@
+import { Button, Badge, Tooltip, Separator, Select, Tabs, ListBox, InputGroup } from '@heroui/react'
+
 import BasePage from '@renderer/components/base/base-page'
-import { mihomoCloseConnections, mihomoCloseConnection } from '@renderer/utils/ipc'
+import {
+  getLanternStatus,
+  mihomoCloseConnections,
+  mihomoCloseConnection
+} from '@renderer/utils/ipc'
+import { deviceAddressKey, gatewayDeviceNames } from '@renderer/utils/gateway-devices'
+import useSWR from 'swr'
 import React, { Key, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import {
-  Badge,
-  Button,
-  Divider,
-  Input,
-  Select,
-  SelectItem,
-  Tab,
-  Tabs,
-  Tooltip
-} from '@heroui/react'
 import { calcTraffic } from '@renderer/utils/calc'
 import ConnectionItem from '@renderer/components/connections/connection-item'
 import { Virtuoso, GroupedVirtuoso } from 'react-virtuoso'
@@ -29,7 +26,7 @@ import { includesIgnoreCase } from '@renderer/utils/includes'
 import { getIconDataURL, getAppName } from '@renderer/utils/ipc'
 import { HiSortAscending, HiSortDescending } from 'react-icons/hi'
 import { cropAndPadTransparent } from '@renderer/utils/image'
-import { platform } from '@renderer/utils/init'
+import { platform, supportsGateway } from '@renderer/utils/init'
 import { useControledMihomoConfig } from '@renderer/hooks/use-controled-mihomo-config'
 import { MdTune } from 'react-icons/md'
 import { useNavigate } from 'react-router-dom'
@@ -53,6 +50,11 @@ let cachedConnections: ControllerConnectionDetail[] = []
 
 const Connections: React.FC = () => {
   const navigate = useNavigate()
+  const { data: gateway } = useSWR(supportsGateway ? 'lantern-status' : null, getLanternStatus, {
+    refreshInterval: 5000,
+    shouldRetryOnError: false
+  })
+  const deviceNames = useMemo(() => gatewayDeviceNames(gateway), [gateway])
   const { controledMihomoConfig } = useControledMihomoConfig()
   const { 'find-process-mode': findProcessMode = 'always' } = controledMihomoConfig || {}
   const [filter, setFilter] = useState('')
@@ -77,9 +79,12 @@ const Connections: React.FC = () => {
   const [connectionsInfo, setConnectionsInfo] = useState<ControllerConnections>()
   const [allConnections, setAllConnections] =
     useState<ControllerConnectionDetail[]>(initialConnections)
-  const [activeConnections, setActiveConnections] = useState<ControllerConnectionDetail[]>([])
-  const [closedConnections, setClosedConnections] =
-    useState<ControllerConnectionDetail[]>(initialConnections)
+  const [activeConnections, setActiveConnections] = useState<ControllerConnectionDetail[]>(() =>
+    initialConnections.filter((connection) => connection.isActive)
+  )
+  const [closedConnections, setClosedConnections] = useState<ControllerConnectionDetail[]>(() =>
+    initialConnections.filter((connection) => !connection.isActive)
+  )
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [isSettingDrawerOpen, setIsSettingDrawerOpen] = useState(false)
   const [settingDrawerReopenSignal, setSettingDrawerReopenSignal] = useState(0)
@@ -124,6 +129,7 @@ const Connections: React.FC = () => {
     () =>
       compileAdvancedFilter(filter, (connection: ControllerConnectionDetail, query: string) => {
         const searchableFields = [
+          deviceNames.get(deviceAddressKey(connection.metadata.sourceIP || '')),
           connection.metadata.process,
           connection.metadata.host,
           connection.metadata.destinationIP,
@@ -137,7 +143,7 @@ const Connections: React.FC = () => {
 
         return includesIgnoreCase(searchableFields, query)
       }),
-    [filter]
+    [filter, deviceNames]
   )
   const filterSuggestions = useMemo(
     () => getEnhancedConnectionFilterSuggestions(filter, filterCursor),
@@ -185,7 +191,15 @@ const Connections: React.FC = () => {
           break
         case 'process':
           comparator = (a, b) =>
-            (a.metadata.process || '').localeCompare(b.metadata.process || '') * dir
+            (
+              deviceNames.get(deviceAddressKey(a.metadata.sourceIP || '')) ||
+              a.metadata.process ||
+              ''
+            ).localeCompare(
+              deviceNames.get(deviceAddressKey(b.metadata.sourceIP || '')) ||
+                b.metadata.process ||
+                ''
+            ) * dir
           break
         default:
           return filtered
@@ -199,6 +213,7 @@ const Connections: React.FC = () => {
     closedConnections,
     filter,
     compiledFilter,
+    deviceNames,
     connectionDirection,
     connectionOrderBy,
     tab
@@ -216,14 +231,16 @@ const Connections: React.FC = () => {
       filteredConnections,
       connectionGroupSort,
       connectionGroupDirection === 'asc',
-      connectionPinnedProcesses
+      connectionPinnedProcesses,
+      deviceNames
     )
   }, [
     grouped,
     filteredConnections,
     connectionGroupSort,
     connectionGroupDirection,
-    connectionPinnedProcesses
+    connectionPinnedProcesses,
+    deviceNames
   ])
 
   const { groupCounts, flatMembers, flatMemberLocalIndex } = useMemo(() => {
@@ -614,7 +631,7 @@ const Connections: React.FC = () => {
 
   const handleOrderByChange = useCallback(
     async (v: unknown) => {
-      const currentKey = (v as { currentKey: string }).currentKey
+      const currentKey = v as string
       if (grouped) {
         await patchAppConfig({
           connectionGroupSort: currentKey as
@@ -789,9 +806,10 @@ const Connections: React.FC = () => {
       const iconUrl = (displayIcon && findProcessMode !== 'off' && iconMap[path]) || ''
       const itemKey = i === 0 ? `${connection.id}-${firstItemRefreshTrigger}` : connection.id
       const displayName =
-        displayAppName && connection.metadata.processPath
+        deviceNames.get(deviceAddressKey(connection.metadata.sourceIP || '')) ||
+        (displayAppName && connection.metadata.processPath
           ? appNameCache[connection.metadata.processPath]
-          : undefined
+          : undefined)
 
       return (
         <ConnectionItem
@@ -815,13 +833,12 @@ const Connections: React.FC = () => {
       selected,
       closeConnection,
       appNameCache,
+      deviceNames,
       findProcessMode,
       displayAppName
     ]
   )
 
-  const flatMembersRef = useRef(flatMembers)
-  flatMembersRef.current = flatMembers
   const flatMemberLocalIndexRef = useRef(flatMemberLocalIndex)
   flatMemberLocalIndexRef.current = flatMemberLocalIndex
   const connectionGroupsRef = useRef(connectionGroups)
@@ -868,32 +885,34 @@ const Connections: React.FC = () => {
     [navigate]
   )
 
-  const renderGroupMember = useCallback((i: number) => {
-    const connection = flatMembersRef.current[i]
-    if (!connection) return <div style={{ minHeight: 80 }} />
-    const path = connection.metadata.processPath || ''
-    const displayName =
-      displayAppNameRef.current && path ? appNameCacheRefStable.current[path] : undefined
-    const localIndex = flatMemberLocalIndexRef.current[i] ?? 0
+  const renderGroupMember = useCallback(
+    (i: number, _groupIndex: number, connection: ControllerConnectionDetail) => {
+      if (!connection) return <div style={{ minHeight: 80 }} />
+      const path = connection.metadata.processPath || ''
+      const displayName =
+        displayAppNameRef.current && path ? appNameCacheRefStable.current[path] : undefined
+      const localIndex = flatMemberLocalIndexRef.current[i] ?? 0
 
-    return (
-      <div className="pl-6" style={{ animation: 'proxy-row-in 0.15s ease both' }}>
-        <ConnectionItem
-          setSelected={setSelected}
-          setIsDetailModalOpen={setIsDetailModalOpen}
-          selected={selectedRef.current}
-          iconUrl=""
-          displayIcon={false}
-          displayName={displayName}
-          hideProcess
-          close={closeConnectionRef.current}
-          index={localIndex}
-          key={connection.id}
-          info={connection}
-        />
-      </div>
-    )
-  }, [])
+      return (
+        <div className="pl-6" style={{ animation: 'proxy-row-in 0.15s ease both' }}>
+          <ConnectionItem
+            setSelected={setSelected}
+            setIsDetailModalOpen={setIsDetailModalOpen}
+            selected={selectedRef.current}
+            iconUrl=""
+            displayIcon={false}
+            displayName={displayName}
+            hideProcess
+            close={closeConnectionRef.current}
+            index={localIndex}
+            key={connection.id}
+            info={connection}
+          />
+        </div>
+      )
+    },
+    []
+  )
 
   const renderGroupHeader = useCallback(
     (index: number) => {
@@ -952,18 +971,10 @@ const Connections: React.FC = () => {
                 ↓ {calcTraffic(connectionsInfo?.downloadTotal ?? 0)}{' '}
               </span>
             </div>
-            <Badge
-              className="mt-2"
-              color="primary"
-              variant="flat"
-              showOutline={false}
-              content={filteredConnections.length}
-            >
+            <Badge.Anchor>
               <Button
-                className="app-nodrag ml-1"
                 isIconOnly
                 size="sm"
-                variant="light"
                 aria-label={tab === 'active' ? '关闭所有连接' : '清空记录'}
                 onPress={() => {
                   if (filter === '') {
@@ -974,6 +985,9 @@ const Connections: React.FC = () => {
                     })
                   }
                 }}
+                variant="ghost"
+                data-color="default"
+                className="app-nodrag ml-1"
               >
                 {tab === 'active' ? (
                   <CgClose className="text-lg" />
@@ -981,13 +995,20 @@ const Connections: React.FC = () => {
                   <CgTrash className="text-lg" />
                 )}
               </Button>
-            </Badge>
+              <Badge
+                className={['mt-2'].filter(Boolean).join(' ')}
+                data-color="primary"
+                variant="soft"
+                data-outline={false}
+                data-shape="rectangle"
+              >
+                <Badge.Label>{filteredConnections.length}</Badge.Label>
+              </Badge>
+            </Badge.Anchor>
           </div>
           <Button
             size="sm"
             isIconOnly
-            className="app-nodrag ml-2"
-            variant="light"
             aria-label={paused ? '继续' : '暂停'}
             onPress={() =>
               setPaused((p) => {
@@ -995,19 +1016,23 @@ const Connections: React.FC = () => {
                 return !p
               })
             }
+            variant="ghost"
+            data-color="default"
+            className="app-nodrag ml-2"
           >
             {paused ? <IoPlay className="text-lg" /> : <IoPause className="text-lg" />}
           </Button>
           <Button
             size="sm"
             isIconOnly
-            className="app-nodrag"
-            variant="light"
             aria-label="连接设置"
             onPress={() => {
               setIsSettingDrawerOpen(true)
               setSettingDrawerReopenSignal((signal) => signal + 1)
             }}
+            variant="ghost"
+            data-color="default"
+            className="app-nodrag"
           >
             <MdTune className="text-lg" />
           </Button>
@@ -1015,7 +1040,11 @@ const Connections: React.FC = () => {
       }
     >
       {isDetailModalOpen && selected && (
-        <ConnectionDetailModal onClose={() => setIsDetailModalOpen(false)} connection={selected} />
+        <ConnectionDetailModal
+          onClose={() => setIsDetailModalOpen(false)}
+          connection={selected}
+          deviceName={deviceNames.get(deviceAddressKey(selected.metadata.sourceIP || ''))}
+        />
       )}
       {isSettingDrawerOpen && (
         <ConnectionSettingDrawer
@@ -1026,92 +1055,111 @@ const Connections: React.FC = () => {
       <div className="overflow-x-auto sticky top-0 z-40">
         <div className="flex p-2 gap-2">
           <Tabs
-            size="sm"
-            color={tab === 'active' ? 'primary' : 'danger'}
             selectedKey={tab}
-            variant="underlined"
-            className="w-fit h-8"
             onSelectionChange={handleTabChange}
+            className="connection-tabs w-fit h-8"
+            data-color={tab === 'active' ? 'primary' : 'danger'}
+            data-size="sm"
+            data-full-width={false}
+            variant="secondary"
           >
-            <Tab
-              key="active"
-              title={
-                <Badge
-                  color={tab === 'active' ? 'primary' : 'default'}
-                  size="sm"
-                  shape="circle"
-                  variant="flat"
-                  content={activeConnections.length}
-                  showOutline={false}
-                >
-                  <span className="p-1">活动中</span>
-                </Badge>
-              }
-            />
-            <Tab
-              key="closed"
-              title={
-                <Badge
-                  color={tab === 'closed' ? 'danger' : 'default'}
-                  size="sm"
-                  shape="circle"
-                  variant="flat"
-                  content={closedConnections.length}
-                  showOutline={false}
-                >
-                  <span className="p-1">已关闭</span>
-                </Badge>
-              }
-            />
-          </Tabs>
-          <Tooltip
-            content={compiledFilter.error ?? '格式错误'}
-            placement="left"
-            isOpen={Boolean(compiledFilter.error)}
-            showArrow={true}
-            color="danger"
-            offset={10}
-          >
-            <div className="relative min-w-0 flex-1">
-              <Input
-                ref={filterInputRef}
-                variant="flat"
-                size="sm"
-                className={
-                  compiledFilter.error ? 'border-red-500 ring-1 ring-red-500 rounded-lg' : ''
+            <Tabs.List aria-label="选项">
+              <Tabs.Tab key="active" id="active">
+                {
+                  <Badge.Anchor className="items-center gap-0.5 leading-none">
+                    <span>活动中</span>
+                    <Badge
+                      size="sm"
+                      data-color={tab === 'active' ? 'primary' : 'default'}
+                      variant="soft"
+                      data-outline={false}
+                      data-shape="circle"
+                    >
+                      <Badge.Label>{activeConnections.length}</Badge.Label>
+                    </Badge>
+                  </Badge.Anchor>
                 }
-                classNames={{
-                  inputWrapper:
-                    'relative h-8 px-3 group-data-[focus-visible=true]:!ring-0 group-data-[focus-visible=true]:!ring-transparent group-data-[focus-visible=true]:!ring-offset-0',
-                  innerWrapper: 'overflow-hidden',
-                  input: 'font-mono text-sm tracking-normal focus-visible:!outline-none'
-                }}
-                value={filter}
-                placeholder="筛选过滤"
-                isClearable
+                <Tabs.Indicator />
+              </Tabs.Tab>
+              <Tabs.Tab key="closed" id="closed">
+                {
+                  <Badge.Anchor className="items-center gap-0.5 leading-none">
+                    <span>已关闭</span>
+                    <Badge
+                      size="sm"
+                      data-color={tab === 'closed' ? 'danger' : 'default'}
+                      variant="soft"
+                      data-outline={false}
+                      data-shape="circle"
+                    >
+                      <Badge.Label>{closedConnections.length}</Badge.Label>
+                    </Badge>
+                  </Badge.Anchor>
+                }
+                <Tabs.Indicator />
+              </Tabs.Tab>
+            </Tabs.List>
+          </Tabs>
+          <Tooltip isOpen={Boolean(compiledFilter.error)} delay={0}>
+            <Tooltip.Trigger className="relative min-w-0 flex-1">
+              <InputGroup
+                fullWidth
+                className={[
+                  compiledFilter.error ? 'border-red-500 ring-1 ring-red-500 rounded-lg' : '',
+                  'relative h-8 px-3 group-data-[focus-visible=true]:ring-0! group-data-[focus-visible=true]:ring-transparent! group-data-[focus-visible=true]:ring-offset-0!',
+                  'overflow-hidden'
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
                 isInvalid={Boolean(compiledFilter.error)}
-                onValueChange={handleFilterValueChange}
-                onKeyDown={handleFilterKeyDown}
-                onFocus={() => {
-                  setIsFilterFocused(true)
-                  requestAnimationFrame(() => syncFilterCursor())
-                }}
-                onBlur={() => {
-                  setCompletionSession(null)
-                  requestAnimationFrame(() => {
-                    const activeElement = document.activeElement
-                    if (activeElement !== filterInputRef.current) {
-                      setIsFilterFocused(false)
-                    }
-                  })
-                }}
-                onClick={() => {
-                  setCompletionSession(null)
-                  syncFilterCursor()
-                }}
-                onKeyUp={() => syncFilterCursor()}
-                onSelect={handleFilterSelect}
-              />
+              >
+                <InputGroup.Input
+                  ref={filterInputRef}
+                  value={filter}
+                  placeholder="筛选过滤"
+                  onKeyDown={handleFilterKeyDown}
+                  onFocus={() => {
+                    setIsFilterFocused(true)
+                    requestAnimationFrame(() => syncFilterCursor())
+                  }}
+                  onBlur={() => {
+                    setCompletionSession(null)
+                    requestAnimationFrame(() => {
+                      const activeElement = document.activeElement
+                      if (activeElement !== filterInputRef.current) {
+                        setIsFilterFocused(false)
+                      }
+                    })
+                  }}
+                  onClick={() => {
+                    setCompletionSession(null)
+                    syncFilterCursor()
+                  }}
+                  onKeyUp={() => syncFilterCursor()}
+                  onSelect={handleFilterSelect}
+                  className="font-mono text-sm tracking-normal focus-visible:outline-none!"
+                  onChange={(event) => handleFilterValueChange(event.target.value)}
+                />
+                {filter && (
+                  <InputGroup.Suffix>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isIconOnly
+                      aria-label="清空"
+                      onPress={(event) => {
+                        handleFilterValueChange('')
+                        event.target
+                          .closest('[data-slot="input-group"]')
+                          ?.querySelector('input')
+                          ?.focus()
+                      }}
+                    >
+                      ×
+                    </Button>
+                  </InputGroup.Suffix>
+                )}
+              </InputGroup>
               {inlineCompletionSuffix ? (
                 <div className="pointer-events-none absolute top-1/2 left-3 right-10 z-10 flex -translate-y-1/2 items-center overflow-hidden font-mono text-sm tracking-normal">
                   <div
@@ -1125,46 +1173,79 @@ const Connections: React.FC = () => {
                   </div>
                 </div>
               ) : null}
-            </div>
+            </Tooltip.Trigger>
+            <Tooltip.Content placement="left" showArrow={true} offset={10} data-color="danger">
+              <Tooltip.Arrow />
+              {compiledFilter.error ?? '格式错误'}
+            </Tooltip.Content>
           </Tooltip>
 
           <Select
             aria-label="排序字段"
-            classNames={{ trigger: 'data-[hover=true]:bg-default-200' }}
-            size="sm"
-            className="w-34 min-w-24 shrink-0"
-            selectedKeys={new Set([grouped ? connectionGroupSort : connectionOrderBy])}
-            disallowEmptySelection={true}
-            onSelectionChange={handleOrderByChange}
+            className={['w-34 min-w-24 shrink-0'].filter(Boolean).join(' ')}
+            data-size="sm"
+            value={(grouped ? connectionGroupSort : connectionOrderBy) ?? null}
+            onChange={handleOrderByChange}
           >
-            {grouped ? (
-              <>
-                <SelectItem key="name">进程名称</SelectItem>
-                <SelectItem key="count">连接数</SelectItem>
-                <SelectItem key="upload">上传量</SelectItem>
-                <SelectItem key="download">下载量</SelectItem>
-                <SelectItem key="uploadSpeed">上传速度</SelectItem>
-                <SelectItem key="downloadSpeed">下载速度</SelectItem>
-              </>
-            ) : (
-              <>
-                <SelectItem key="upload">上传量</SelectItem>
-                <SelectItem key="download">下载量</SelectItem>
-                <SelectItem key="uploadSpeed">上传速度</SelectItem>
-                <SelectItem key="downloadSpeed">下载速度</SelectItem>
-                <SelectItem key="time">时间</SelectItem>
-                <SelectItem key="process">进程名称</SelectItem>
-              </>
-            )}
+            <Select.Trigger className="data-[hover=true]:bg-default-200">
+              <Select.Value />
+              <Select.Indicator />
+            </Select.Trigger>
+            <Select.Popover placement="bottom" shouldFlip containerPadding={56}>
+              <ListBox>
+                {grouped && (
+                  <ListBox.Item key="name" id="name" textValue="进程名称">
+                    进程名称
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                )}
+                {grouped && (
+                  <ListBox.Item key="count" id="count" textValue="连接数">
+                    连接数
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                )}
+                <ListBox.Item key="upload" id="upload" textValue="上传量">
+                  上传量
+                  <ListBox.ItemIndicator />
+                </ListBox.Item>
+                <ListBox.Item key="download" id="download" textValue="下载量">
+                  下载量
+                  <ListBox.ItemIndicator />
+                </ListBox.Item>
+                <ListBox.Item key="uploadSpeed" id="uploadSpeed" textValue="上传速度">
+                  上传速度
+                  <ListBox.ItemIndicator />
+                </ListBox.Item>
+                <ListBox.Item key="downloadSpeed" id="downloadSpeed" textValue="下载速度">
+                  下载速度
+                  <ListBox.ItemIndicator />
+                </ListBox.Item>
+                {!grouped && (
+                  <ListBox.Item key="time" id="time" textValue="时间">
+                    时间
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                )}
+                {!grouped && (
+                  <ListBox.Item key="process" id="process" textValue="进程名称">
+                    进程名称
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                )}
+              </ListBox>
+            </Select.Popover>
           </Select>
           <Button
             size="sm"
             isIconOnly
-            className="bg-content2"
             aria-label={
               (grouped ? connectionGroupDirection : connectionDirection) === 'asc' ? '升序' : '降序'
             }
             onPress={handleDirectionToggle}
+            variant="primary"
+            data-color="default"
+            className="bg-content2"
           >
             {(grouped ? connectionGroupDirection : connectionDirection) === 'asc' ? (
               <HiSortAscending className="text-lg" />
@@ -1173,7 +1254,7 @@ const Connections: React.FC = () => {
             )}
           </Button>
         </div>
-        <Divider />
+        <Separator />
       </div>
       <div className="h-[calc(100vh-100px)] mt-px">
         {grouped ? (
@@ -1181,6 +1262,7 @@ const Connections: React.FC = () => {
             <GroupedVirtuoso
               key="connections-grouped"
               groupCounts={groupCounts}
+              data={flatMembers}
               groupContent={renderGroupHeader}
               itemContent={renderGroupMember}
               defaultItemHeight={80}

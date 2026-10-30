@@ -28,14 +28,12 @@ import { shouldSkipServiceUnavailableFallback } from '../service/fallback'
 import { appendAppLog, setMihomoLogSource } from '../utils/log'
 import { showNotification } from '../utils/notification'
 import { recoverDNS, setPublicDNS } from './network'
+import { emitWebhook, notifyCoreStarted, notifyCoreStopped } from '../resolve/webhook'
 
 interface ServiceCoreRuntimeOptions {
   notifyCoreLog: (source: ServiceCoreEvent) => void
   resetDirectCoreRetry: () => void
-  startCore: (
-    detached?: boolean,
-    shouldContinue?: () => boolean
-  ) => Promise<Promise<void>[]>
+  startCore: (detached?: boolean, shouldContinue?: () => boolean) => Promise<Promise<void>[]>
 }
 
 export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
@@ -286,6 +284,7 @@ export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
 
     switch (event.type) {
       case 'started':
+        if (event.running) notifyCoreStarted('service', event.pid)
         serviceCoreState.autoResumePaused = false
         serviceCoreState.managed = true
         await getAxios(true).catch(() => {})
@@ -304,6 +303,7 @@ export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
         break
       case 'takeover':
       case 'ready':
+        if (event.running) notifyCoreStarted('service', event.pid)
         serviceCoreState.autoResumePaused = false
         serviceCoreState.managed = true
         await getAxios(true).catch(() => {})
@@ -321,6 +321,16 @@ export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
       case 'exited':
       case 'failed':
       case 'restart_failed':
+        if (event.type === 'exited') {
+          notifyCoreStopped('service', event.old_pid ?? event.pid, 'exited')
+        } else {
+          emitWebhook(
+            'lifecycle',
+            'core.failed',
+            { mode: 'service', reason: event.type },
+            'failure'
+          )
+        }
         clearStreams()
         await recoverDNS().catch((error) =>
           appendAppLog(`[Manager]: recover DNS after service core stopped failed, ${error}\n`)
@@ -336,6 +346,7 @@ export function createServiceCoreRuntime(options: ServiceCoreRuntimeOptions) {
         }
         break
       case 'stopped':
+        notifyCoreStopped('service', event.old_pid ?? event.pid)
         serviceCoreState.autoResumePaused = true
         serviceCoreState.managed = false
         clearStreams()

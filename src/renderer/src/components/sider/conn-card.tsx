@@ -1,6 +1,7 @@
-import { Button, Card, CardBody, CardFooter, Tooltip } from '@heroui/react'
+import { Button, Card } from '@heroui/react'
+
 import { FaCircleArrowDown, FaCircleArrowUp } from 'react-icons/fa6'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import { calcTraffic } from '@renderer/utils/calc'
 import React, { useEffect, useState, useRef } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
@@ -8,18 +9,19 @@ import { CSS } from '@dnd-kit/utilities'
 import { IoLink } from 'react-icons/io5'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
 import TrafficChart, { type TrafficChartHandle } from './traffic-chart'
+import SiderItem from './sider-item'
 
 interface Props {
   iconOnly?: boolean
+  expanded?: boolean
 }
 
 const ConnCard: React.FC<Props> = (props) => {
-  const { iconOnly } = props
+  const { iconOnly, expanded } = props
   const { appConfig } = useAppConfig()
   const { connectionCardStatus = 'col-span-2', disableAnimation = false } = appConfig || {}
 
   const location = useLocation()
-  const navigate = useNavigate()
   const match = location.pathname.includes('/connections')
 
   const [upload, setUpload] = useState(0)
@@ -53,26 +55,19 @@ const ConnCard: React.FC<Props> = (props) => {
 
   if (iconOnly) {
     return (
-      <div className={`${connectionCardStatus} flex justify-center`}>
-        <Tooltip content="连接" placement="right">
-          <Button
-            size="sm"
-            isIconOnly
-            color={match ? 'primary' : 'default'}
-            variant={match ? 'solid' : 'light'}
-            onPress={() => {
-              navigate('/connections')
-            }}
-          >
-            <IoLink className="text-[20px]" />
-          </Button>
-        </Tooltip>
-      </div>
+      <SiderItem
+        className={connectionCardStatus}
+        title="连接"
+        route="/connections"
+        icon={<IoLink className="text-[20px]" />}
+        expanded={expanded}
+      />
     )
   }
 
   return (
     <div
+      ref={setNodeRef}
       style={{
         position: 'relative',
         transform: CSS.Transform.toString(transform),
@@ -84,19 +79,22 @@ const ConnCard: React.FC<Props> = (props) => {
       {connectionCardStatus === 'col-span-2' ? (
         <>
           <Card
-            fullWidth
-            ref={setNodeRef}
             {...attributes}
             {...listeners}
-            className={`${match ? 'bg-primary' : 'hover:bg-primary/30'} ${isDragging ? `${disableAnimation ? '' : 'scale-[0.95]'} tap-highlight-transparent` : ''} relative overflow-hidden`}
+            className={[
+              'w-full',
+              `${match ? 'bg-primary' : 'hover:bg-primary/30'} ${isDragging ? `${disableAnimation ? '' : 'scale-[0.95]'} tap-highlight-transparent` : ''} relative overflow-hidden`
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
-            <CardBody className="pb-1 pt-0 px-0 overflow-y-visible">
+            <Card.Content className="pb-1 pt-0 px-0 overflow-y-visible">
               <div className="flex justify-between">
                 <Button
                   isIconOnly
+                  variant="secondary"
+                  data-color="default"
                   className="bg-transparent pointer-events-none"
-                  variant="flat"
-                  color="default"
                 >
                   <IoLink
                     color="default"
@@ -116,32 +114,35 @@ const ConnCard: React.FC<Props> = (props) => {
                   </div>
                 </div>
               </div>
-            </CardBody>
-            <CardFooter className="pt-1 relative z-10">
+            </Card.Content>
+            <Card.Footer className="pt-1 relative z-10">
               <div
                 className={`flex justify-between items-center w-full text-md font-bold ${match ? 'text-primary-foreground' : 'text-foreground'}`}
               >
                 <h3>连接</h3>
               </div>
-            </CardFooter>
+            </Card.Footer>
             <TrafficChart ref={trafficChartRef} isActive={match} />
           </Card>
         </>
       ) : (
         <Card
-          fullWidth
-          ref={setNodeRef}
           {...attributes}
           {...listeners}
-          className={`${match ? 'bg-primary' : 'hover:bg-primary/30'} ${isDragging ? `${disableAnimation ? '' : 'scale-[0.95]'} tap-highlight-transparent` : ''}`}
+          className={[
+            'w-full',
+            `${match ? 'bg-primary' : 'hover:bg-primary/30'} ${isDragging ? `${disableAnimation ? '' : 'scale-[0.95]'} tap-highlight-transparent` : ''}`
+          ]
+            .filter(Boolean)
+            .join(' ')}
         >
-          <CardBody className="pb-1 pt-0 px-0 overflow-y-visible">
+          <Card.Content className="pb-1 pt-0 px-0 overflow-y-visible">
             <div className="flex justify-between">
               <Button
                 isIconOnly
+                variant="secondary"
+                data-color="default"
                 className="bg-transparent pointer-events-none"
-                variant="flat"
-                color="default"
               >
                 <IoLink
                   color="default"
@@ -149,14 +150,14 @@ const ConnCard: React.FC<Props> = (props) => {
                 />
               </Button>
             </div>
-          </CardBody>
-          <CardFooter className="pt-1">
+          </Card.Content>
+          <Card.Footer className="pt-1">
             <h3
               className={`text-md font-bold ${match ? 'text-primary-foreground' : 'text-foreground'}`}
             >
               连接
             </h3>
-          </CardFooter>
+          </Card.Footer>
         </Card>
       )}
     </div>
@@ -164,5 +165,5 @@ const ConnCard: React.FC<Props> = (props) => {
 }
 
 export default React.memo(ConnCard, (prevProps, nextProps) => {
-  return prevProps.iconOnly === nextProps.iconOnly
+  return prevProps.iconOnly === nextProps.iconOnly && prevProps.expanded === nextProps.expanded
 })

@@ -5,6 +5,7 @@ import { generateProfile } from '../core/factory'
 import { getAppConfig } from './app'
 import { defaultControledMihomoConfig } from '../utils/template'
 import { deepMerge } from '../utils/merge'
+import { notifyConfigOperation } from '../resolve/webhook'
 
 let controledMihomoConfig: Partial<MihomoConfig> // mihomo.yaml
 
@@ -63,4 +64,5 @@ export async function patchControledMihomoConfig(patch: Partial<MihomoConfig>): 
   // 新的通道容量会在下一次内核启动时由 startCore 应用。
   await generateProfile({ preserveRuntimeTestPorts: true })
   await writeFile(controledMihomoConfigPath(), stringifyYaml(controledMihomoConfig), 'utf-8')
+  notifyConfigOperation('patchControledMihomoConfig', patch)
 }

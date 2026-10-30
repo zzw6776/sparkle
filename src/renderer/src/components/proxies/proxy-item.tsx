@@ -1,4 +1,6 @@
-import { Button, Card, CardBody } from '@heroui/react'
+import { Button, Spinner, Card } from '@heroui/react'
+import { Pressable } from 'react-aria'
+
 import { mihomoUnfixedProxy } from '@renderer/utils/ipc'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { FaMapPin } from 'react-icons/fa6'
@@ -57,7 +59,10 @@ const ProxyItem: React.FC<Props> = (props) => {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const touchStartPos = useRef<{ x: number; y: number } | null>(null)
+  const touchStartPos = useRef<{
+    x: number
+    y: number
+  } | null>(null)
   const touchTriggeredRef = useRef(false)
   const lastTouchTime = useRef(0)
   const [showTooltip, setShowTooltip] = useState(false)
@@ -178,8 +183,8 @@ const ProxyItem: React.FC<Props> = (props) => {
   const speedTitle = speedTesting
     ? '停止下载测速'
     : speedTest
-    ? `${(speedTest.bytesPerSecond / 1024 / 1024).toFixed(2)} MiB/s · ${(speedTest.bitsPerSecond / 1_000_000).toFixed(1)} Mbps`
-    : speedTestError || '真实下载测速'
+      ? `${(speedTest.bytesPerSecond / 1024 / 1024).toFixed(2)} MiB/s · ${(speedTest.bitsPerSecond / 1_000_000).toFixed(1)} Mbps`
+      : speedTestError || '真实下载测速'
 
   const onDelay = (): void => {
     void onProxyDelay(proxy, group)
@@ -196,8 +201,7 @@ const ProxyItem: React.FC<Props> = (props) => {
       onTouchMove={showProxyDetailTooltip ? handleTouchMove : undefined}
       onTouchEnd={showProxyDetailTooltip ? handleTouchEnd : undefined}
     >
-      <Card
-        as="div"
+      <Pressable
         onPress={() => {
           if (touchTriggeredRef.current) {
             touchTriggeredRef.current = false
@@ -205,124 +209,71 @@ const ProxyItem: React.FC<Props> = (props) => {
           }
           onSelect(group.name, proxy.name)
         }}
-        isPressable
-        fullWidth
-        shadow="sm"
-        className={`${fixed ? 'bg-secondary/30' : selected ? 'bg-primary/30' : 'bg-content2'}`}
-        radius="sm"
       >
-        <CardBody className="py-1.5 px-2">
-          <div
-            className={`flex ${proxyDisplayLayout === 'double' ? 'gap-1' : 'justify-between items-center'}`}
-          >
-            {proxyDisplayLayout === 'double' ? (
-              <>
-                <div className="flex flex-col gap-0 flex-1 min-w-0">
-                  <div className="text-ellipsis overflow-hidden whitespace-nowrap">
-                    <div className="flag-emoji inline">{proxy.name}</div>
-                  </div>
-                  <div className="text-[12px] text-foreground-500 leading-snug mt-0.5 overflow-hidden whitespace-nowrap text-ellipsis">
-                    <span>{proxy.type}</span>
-                    {proxy.udp !== undefined && !shouldShowGroupSelectedProxy && (
-                      <span className="ml-1 opacity-60"> UDP</span>
-                    )}
-                    {shouldShowGroupSelectedProxy && (
-                      <>
-                        <span className="mx-1">→</span>
-                        <span className="flag-emoji">{proxy.now}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center justify-center gap-0.5 shrink-0">
-                  {fixed && (
-                    <Button
-                      isIconOnly
-                      color="danger"
-                      onPress={async () => {
-                        await mihomoUnfixedProxy(group.name)
-                        mutateProxies()
-                      }}
-                      variant="light"
-                      className="h-6 w-6 min-w-6 p-0 text-xs"
-                    >
-                      <FaMapPin className="text-xs le" />
-                    </Button>
-                  )}
-                  <Button
-                    isIconOnly
-                    isLoading={delayTesting}
-                    color={delayColor(delay)}
-                    onPress={onDelay}
-                    variant="light"
-                    className="h-8 w-8 min-w-8 p-0 text-xs"
-                  >
-                    {delayText(delay)}
-                  </Button>
-                  <Button
-                    color={
-                      speedTesting
-                        ? 'danger'
-                        : speedTestError
-                          ? 'danger'
-                          : speedTest
-                            ? 'success'
-                            : 'primary'
-                    }
-                    onPress={() => void onProxySpeedTest(proxy)}
-                    variant="light"
-                    title={speedTitle}
-                    className="h-8 min-w-14 px-1 text-[10px]"
-                  >
-                    {speedText}
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-ellipsis overflow-hidden whitespace-nowrap">
-                  <div className="flag-emoji inline">{proxy.name}</div>
-                  {proxyDisplayLayout === 'single' && (
-                    <>
-                      <div className="inline ml-2 text-foreground-500">{proxy.type}</div>
-                      {shouldShowGroupSelectedProxy && (
-                        <div className="inline ml-2 text-foreground-500 flag-emoji">
-                          → {proxy.now}
-                        </div>
+        <Card
+          className={[
+            'w-full',
+            `${fixed ? 'bg-secondary/30' : selected ? 'bg-primary/30' : 'bg-content2'}`
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          data-shadow="sm"
+          data-radius="sm"
+          data-pressable="true"
+          role="button"
+          tabIndex={0}
+        >
+          <Card.Content className="overflow-hidden px-2 py-1">
+            <div
+              className={`flex ${proxyDisplayLayout === 'double' ? 'gap-1' : 'justify-between items-center'}`}
+            >
+              {proxyDisplayLayout === 'double' ? (
+                <>
+                  <div className="flex flex-col gap-0 flex-1 min-w-0">
+                    <div className="text-ellipsis overflow-hidden whitespace-nowrap leading-5">
+                      <div className="flag-emoji inline">{proxy.name}</div>
+                    </div>
+                    <div className="text-[12px] text-foreground-500 leading-4 overflow-hidden whitespace-nowrap text-ellipsis">
+                      <span>{proxy.type}</span>
+                      {proxy.udp !== undefined && !shouldShowGroupSelectedProxy && (
+                        <span className="ml-1 opacity-60"> UDP</span>
                       )}
-                    </>
-                  )}
-                </div>
-                <div className="flex items-center gap-0.5 shrink-0">
-                  {fixed && (
-                    <div className="flex items-center">
+                      {shouldShowGroupSelectedProxy && (
+                        <>
+                          <span className="mx-1">→</span>
+                          <span className="flag-emoji">{proxy.now}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-center gap-0.5 shrink-0">
+                    {fixed && (
                       <Button
                         isIconOnly
-                        color="danger"
                         onPress={async () => {
                           await mihomoUnfixedProxy(group.name)
                           mutateProxies()
                         }}
-                        variant="light"
+                        variant="ghost"
+                        data-color="danger"
                         className="h-6 w-6 min-w-6 p-0 text-xs"
                       >
                         <FaMapPin className="text-xs le" />
                       </Button>
-                    </div>
-                  )}
-                  <div className="flex items-center">
+                    )}
                     <Button
                       isIconOnly
-                      isLoading={delayTesting}
-                      color={delayColor(delay)}
                       onPress={onDelay}
-                      variant="light"
-                      className="h-full w-8 min-w-8 p-0 text-sm"
+                      variant="ghost"
+                      data-color={delayColor(delay)}
+                      className="h-8 w-8 min-w-8 p-0 text-xs"
+                      isPending={delayTesting}
+                      isDisabled={delayTesting}
                     >
-                      {delayText(delay)}
+                      {delayTesting ? <Spinner size="sm" color="current" /> : delayText(delay)}
                     </Button>
                     <Button
-                      color={
+                      data-color={
                         speedTesting
                           ? 'danger'
                           : speedTestError
@@ -332,19 +283,66 @@ const ProxyItem: React.FC<Props> = (props) => {
                               : 'primary'
                       }
                       onPress={() => void onProxySpeedTest(proxy)}
-                      variant="light"
-                      title={speedTitle}
+                      variant="ghost"
+                      aria-label={speedTitle}
                       className="h-full min-w-14 px-1 text-[10px]"
                     >
                       {speedText}
                     </Button>
                   </div>
-                </div>
-              </>
-            )}
-          </div>
-        </CardBody>
-      </Card>
+                </>
+              ) : (
+                <>
+                  <div className="text-ellipsis overflow-hidden whitespace-nowrap">
+                    <div className="flag-emoji inline">{proxy.name}</div>
+                    {proxyDisplayLayout === 'single' && (
+                      <>
+                        <div className="inline ml-2 text-foreground-500">{proxy.type}</div>
+                        {shouldShowGroupSelectedProxy && (
+                          <div className="inline ml-2 text-foreground-500 flag-emoji">
+                            → {proxy.now}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    {fixed && (
+                      <div className="flex items-center">
+                        <Button
+                          isIconOnly
+                          onPress={async () => {
+                            await mihomoUnfixedProxy(group.name)
+                            mutateProxies()
+                          }}
+                          variant="ghost"
+                          data-color="danger"
+                          className="h-6 w-6 min-w-6 p-0 text-xs"
+                        >
+                          <FaMapPin className="text-xs le" />
+                        </Button>
+                      </div>
+                    )}
+                    <div className="flex items-center">
+                      <Button
+                        isIconOnly
+                        onPress={onDelay}
+                        variant="ghost"
+                        data-color={delayColor(delay)}
+                        className="h-full w-8 min-w-8 p-0 text-sm"
+                        isPending={delayTesting}
+                        isDisabled={delayTesting}
+                      >
+                        {delayTesting ? <Spinner size="sm" color="current" /> : delayText(delay)}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </Card.Content>
+        </Card>
+      </Pressable>
       {showProxyDetailTooltip && (
         <ProxyDetailTooltip
           proxy={proxy}

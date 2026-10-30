@@ -1,4 +1,8 @@
-import { Button, Chip, Progress } from '@heroui/react'
+import {
+  LegacyButton as Button,
+  LegacyChip as Chip,
+  LegacyProgress as Progress
+} from '@renderer/components/base/legacy-heroui'
 import {
   FOLLOW_TEST_GROUP,
   TestGroupSelectors,
@@ -371,7 +375,7 @@ const GradeCell = memo<GradeCellProps>(({ grade }) =>
     <Chip
       size="sm"
       color={grade.color}
-      variant="flat"
+      variant="secondary"
       startContent={grade.color === 'danger' ? <MdErrorOutline /> : <MdCheckCircle />}
     >
       {grade.label}
@@ -693,7 +697,7 @@ const ActualLogPanel = memo<ActualLogPanelProps>(({ logs, expanded, onToggle, on
         </button>
         <Button
           size="sm"
-          variant="flat"
+          variant="secondary"
           className="mr-2 h-7 min-w-0 shrink-0 px-2"
           startContent={<MdContentCopy />}
           onPress={onCopy}
@@ -805,7 +809,7 @@ const CodexRuntimePanel = memo<CodexRuntimePanelProps>(
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium text-foreground">Codex Runtime</span>
-              <Chip size="sm" variant="flat" color={chipColor}>
+              <Chip size="sm" variant="secondary" color={chipColor}>
                 {stateLabel}
               </Chip>
               {!usingSystem && status.source === 'managed' && status.state === 'ready' && (
@@ -841,7 +845,7 @@ const CodexRuntimePanel = memo<CodexRuntimePanelProps>(
               <Button
                 size="sm"
                 color={status.state === 'error' ? 'danger' : 'primary'}
-                variant={status.state === 'error' ? 'flat' : 'solid'}
+                variant={status.state === 'error' ? 'secondary' : 'primary'}
                 className="shrink-0"
                 isDisabled={disabled && !busy}
                 onPress={busy ? onCancel : onInstall}
@@ -1446,7 +1450,7 @@ const CodexTest: React.FC = () => {
           <Button
             size="sm"
             color={mode === 'link' ? 'primary' : 'default'}
-            variant={mode === 'link' ? 'solid' : 'light'}
+            variant={mode === 'link' ? 'primary' : 'ghost'}
             className="min-w-28"
             onPress={() => changeMode('link')}
           >
@@ -1455,7 +1459,7 @@ const CodexTest: React.FC = () => {
           <Button
             size="sm"
             color={mode === 'actual' ? 'primary' : 'default'}
-            variant={mode === 'actual' ? 'solid' : 'light'}
+            variant={mode === 'actual' ? 'primary' : 'ghost'}
             className="min-w-28"
             onPress={() => changeMode('actual')}
           >

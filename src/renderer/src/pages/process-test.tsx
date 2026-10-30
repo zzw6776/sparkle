@@ -1,4 +1,10 @@
-import { Autocomplete, AutocompleteItem, Button, Checkbox, Chip } from '@heroui/react'
+import {
+  LegacyAutocomplete as Autocomplete,
+  LegacyAutocompleteItem as AutocompleteItem,
+  LegacyButton as Button,
+  LegacyChip as Chip,
+  LegacyCheckbox as Checkbox
+} from '@renderer/components/base/legacy-heroui'
 import {
   FOLLOW_TEST_GROUP,
   TestGroupSelectors,
@@ -242,7 +248,7 @@ const ProcessTestRow = memo<ProcessTestRowProps>((props) => {
         <Chip
           size="sm"
           color={grade.color}
-          variant="flat"
+          variant="secondary"
           startContent={grade.color === 'danger' ? <MdErrorOutline /> : <MdCheckCircle />}
         >
           {grade.label}
@@ -593,6 +599,7 @@ const ProcessTest: React.FC = () => {
             {catalogs.map((item) => (
               <AutocompleteItem
                 key={item.key}
+                value={item.key}
                 textValue={`${processLabel(item)} ${item.processPath} ${item.sourceIP}`}
                 startContent={
                   selectedProcessKeys.has(item.key) ? (
@@ -607,7 +614,7 @@ const ProcessTest: React.FC = () => {
 
           <Button
             size="sm"
-            variant="flat"
+            variant="secondary"
             startContent={<MdClearAll className="text-lg" />}
             isDisabled={selectedProcessKeys.size === 0}
             onPress={() => {
@@ -665,7 +672,7 @@ const ProcessTest: React.FC = () => {
               <Chip
                 key={item.key}
                 size="sm"
-                variant="flat"
+                variant="secondary"
                 onClose={() => {
                   selectionTouchedRef.current = true
                   setSelectedProcessKeys((current) => {

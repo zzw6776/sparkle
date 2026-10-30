@@ -1,4 +1,10 @@
-import { Autocomplete, AutocompleteItem, Button, Progress, Tooltip } from '@heroui/react'
+import {
+  LegacyAutocomplete as Autocomplete,
+  LegacyAutocompleteItem as AutocompleteItem,
+  LegacyButton as Button,
+  LegacyProgress as Progress,
+  LegacyTooltip as Tooltip
+} from '@renderer/components/base/legacy-heroui'
 import BasePage from '@renderer/components/base/base-page'
 import { formatTestHistoryTime } from '@renderer/utils/test-history'
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
@@ -26,7 +32,7 @@ export function TestPageShell({
         <Button
           size="sm"
           isIconOnly
-          variant="light"
+          variant="ghost"
           className="app-nodrag"
           title="返回测速中心"
           onPress={onBack}
@@ -178,6 +184,7 @@ export function TestOptionSelect({
         {options.map((option) => (
           <AutocompleteItem
             key={option.key}
+            value={option.key}
             textValue={option.description ? `${option.label} ${option.description}` : option.label}
             description={option.description}
           >
@@ -216,7 +223,7 @@ export function TestRoundSelector({
             size="sm"
             className="min-w-16 data-[disabled=true]:opacity-100"
             color={value === option ? 'primary' : 'default'}
-            variant={value === option ? 'solid' : 'flat'}
+            variant={value === option ? 'primary' : 'secondary'}
             isDisabled={disabled}
             onPress={() => onChange(option)}
           >
@@ -312,7 +319,11 @@ export function TestNumberAutocomplete({
           {options
             .filter((option) => option >= min && option <= max)
             .map((option) => (
-              <AutocompleteItem key={String(option)} textValue={String(option)}>
+              <AutocompleteItem
+                key={String(option)}
+                value={String(option)}
+                textValue={String(option)}
+              >
                 {option}
               </AutocompleteItem>
             ))}
@@ -360,7 +371,7 @@ export function TestRunButton({
 }: TestRunButtonProps): React.JSX.Element {
   if (blocked) {
     return (
-      <Button variant="flat" className={DISABLED_ACTION_CLASS} isDisabled>
+      <Button variant="secondary" className={DISABLED_ACTION_CLASS} isDisabled>
         {blockedLabel}
       </Button>
     )
@@ -369,7 +380,7 @@ export function TestRunButton({
   return (
     <Button
       color={running ? 'danger' : 'primary'}
-      variant={running ? 'flat' : 'solid'}
+      variant={running ? 'secondary' : 'primary'}
       className={DISABLED_ACTION_CLASS}
       isLoading={running && stopping}
       isDisabled={!running && disabled}

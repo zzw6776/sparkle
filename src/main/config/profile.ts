@@ -1,6 +1,6 @@
 import { getControledMihomoConfig } from './controledMihomo'
 import { mihomoProfileWorkDir, mihomoWorkDir, profileConfigPath, profilePath } from '../utils/dirs'
-import { addProfileUpdater, delProfileUpdater, normalizeInterval } from '../core/profileUpdater'
+import { addProfileUpdater, delProfileUpdater } from '../core/profileUpdater'
 import { readFile, writeFile, rm, mkdir } from 'fs/promises'
 import { fileToStr } from '@uruhalushia/sparkle-native'
 import { restartCore } from '../core/manager'
@@ -21,6 +21,7 @@ import { getUserAgent } from '../utils/userAgent'
 import { execWithElevation } from '../utils/elevation'
 import { decryptAgeText, encryptAgeText, isAgeEncryptedText } from '../utils/age'
 import { isHttpUrl } from '../utils/url'
+import { isValidProfileInterval, parseProfileUpdateInterval } from '../utils/profileInterval'
 
 let profileConfig: ProfileConfig // profile.yaml
 const FILE_PERMISSION_ELEVATION_REQUIRED = 'FILE_PERMISSION_ELEVATION_REQUIRED'
@@ -74,7 +75,8 @@ export async function updateProfileItem(item: ProfileItem): Promise<void> {
   const normalizedItem: ProfileItem = {
     ...item,
     autoUpdate: item.autoUpdate ?? true,
-    interval: item.autoUpdate === false ? 0 : normalizeInterval(item.interval)
+    interval:
+      item.autoUpdate === false ? 0 : isValidProfileInterval(item.interval) ? item.interval : 0
   }
 
   const oldItem = config.items[index]
@@ -119,6 +121,11 @@ export async function updateProfileItem(item: ProfileItem): Promise<void> {
 }
 
 export async function addProfileItem(item: Partial<ProfileItem>): Promise<void> {
+  const newItem = await refreshProfileItem(item)
+  await addProfileUpdater(newItem)
+}
+
+export async function refreshProfileItem(item: Partial<ProfileItem>): Promise<ProfileItem> {
   const isExisting = Boolean(item.id && (await getProfileItem(item.id)))
   const newItem = await createProfile(item)
   const config = await getProfileConfig()
@@ -144,11 +151,7 @@ export async function addProfileItem(item: Partial<ProfileItem>): Promise<void> 
     await restartCore()
   }
 
-  if (newItem.type === 'remote' && newItem.interval && newItem.autoUpdate !== false) {
-    await addProfileUpdater(newItem)
-  } else {
-    await delProfileUpdater(newItem.id)
-  }
+  return newItem
 }
 
 export async function removeProfileItem(id: string): Promise<void> {
@@ -186,7 +189,9 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
   const existingItem = item.id ? await getProfileItem(item.id) : undefined
   const autoUpdate = item.autoUpdate ?? existingItem?.autoUpdate ?? true
   const initialInterval = autoUpdate
-    ? normalizeInterval(item.interval ?? existingItem?.interval ?? 0)
+    ? isValidProfileInterval(item.interval ?? existingItem?.interval)
+      ? (item.interval ?? existingItem?.interval)!
+      : 0
     : 0
   const newItem = {
     id,
@@ -329,14 +334,11 @@ export async function createProfile(item: Partial<ProfileItem>): Promise<Profile
       const intervalKey = Object.keys(headers).find((k) =>
         k.toLowerCase().endsWith('profile-update-interval')
       )
-      if (newItem.autoUpdate !== false && intervalKey && !newItem.interval) {
-        const remoteInterval = parseInt(headers[intervalKey])
-        if (remoteInterval > 0) {
-          if (remoteInterval >= 3600) {
-            newItem.interval = normalizeInterval(Math.round(remoteInterval / 60))
-          } else {
-            newItem.interval = normalizeInterval(remoteInterval * 60)
-          }
+      if (newItem.autoUpdate !== false && intervalKey) {
+        const interval = parseProfileUpdateInterval(headers[intervalKey])
+        if (interval !== undefined) {
+          newItem.interval = interval
+          newItem.locked = true
         }
       }
       const userinfoKey = Object.keys(headers).find((k) =>

@@ -1,4 +1,9 @@
-import { Button, Checkbox, Tooltip, cn } from '@heroui/react'
+import { cn } from '@heroui/react'
+import {
+  LegacyButton as Button,
+  LegacyCheckbox as Checkbox,
+  LegacyTooltip as Tooltip
+} from '@renderer/components/base/legacy-heroui'
 import {
   useEffect,
   useRef,
@@ -214,7 +219,7 @@ export function TestResultSortHeader({
   return (
     <Button
       size="sm"
-      variant="light"
+      variant="ghost"
       className="h-6 min-w-0 justify-start gap-0.5 px-0 text-xs text-foreground-500"
       endContent={
         !active ? (
@@ -298,7 +303,7 @@ export function TestResultSwitchAction({
           <Button
             size="sm"
             color={isCurrent ? 'success' : 'primary'}
-            variant="flat"
+            variant="secondary"
             className="min-w-0 px-2"
             isLoading={isLoading}
             isDisabled={switchBusy || isCurrent || !canSwitch}

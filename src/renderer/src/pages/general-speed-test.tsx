@@ -1,4 +1,11 @@
-import { Button, Chip, Input, Select, SelectItem, Switch } from '@heroui/react'
+import {
+  LegacyButton as Button,
+  LegacyChip as Chip,
+  LegacyInput as Input,
+  LegacySelect as Select,
+  LegacySelectItem as SelectItem,
+  LegacySwitch as Switch
+} from '@renderer/components/base/legacy-heroui'
 import {
   FOLLOW_TEST_GROUP,
   TestGroupSelectors,
@@ -213,7 +220,7 @@ const GeneralSpeedTestRow = memo<GeneralSpeedTestRowProps>((props) => {
       >
         <span>
           {delayTesting ? (
-            <Chip size="sm" color="primary" variant="flat">
+            <Chip size="sm" color="primary" variant="secondary">
               测试中
             </Chip>
           ) : delay === undefined ? (
@@ -659,7 +666,7 @@ const GeneralSpeedTest: React.FC = () => {
           />
           <Button
             size="sm"
-            variant="flat"
+            variant="secondary"
             className="data-[disabled=true]:opacity-100"
             isDisabled={interactionDisabled}
             endContent={configExpanded ? <MdExpandLess /> : <MdExpandMore />}

@@ -1,6 +1,7 @@
 import { useLayoutEffect, type ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { markInitialContentPartReady } from '@renderer/utils/startup'
+import { supportsGateway } from '@renderer/utils/init'
 import {
   SpeedTest,
   GeneralSpeedTest,
@@ -10,6 +11,7 @@ import {
   DNS,
   Logs,
   Mihomo,
+  Gateway,
   Override,
   Profiles,
   Proxies,
@@ -41,6 +43,10 @@ const routes = [
   { path: '/speed-test/codex', element: startupRoute(<CodexTest />) },
   { path: '/speed-test/process', element: startupRoute(<ProcessTest />) },
 
+  {
+    path: '/gateway',
+    element: startupRoute(supportsGateway ? <Gateway /> : <Navigate to="/proxies" replace />)
+  },
   {
     path: '/mihomo',
     element: startupRoute(<Mihomo />)

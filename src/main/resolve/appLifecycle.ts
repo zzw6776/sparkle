@@ -4,6 +4,7 @@ import { stopNetworkDetection } from '../core/network'
 import { disableSysProxySync, triggerSysProxy } from '../sys/sysproxy'
 import { appendAppLog } from '../utils/log'
 import { stopAllCodexTests } from '../core/codex-test-manager'
+import { emitWebhook, flushWebhooks } from './webhook'
 
 interface AppQuitLifecycleContext {
   getMainWindow: () => BrowserWindow | null
@@ -92,6 +93,8 @@ async function cleanupBeforeExit(useRegistry: boolean): Promise<void> {
       }
     })()
   ])
+  emitWebhook('application', 'app.quit')
+  await flushWebhooks()
 }
 
 function showQuitConfirmDialog(context: AppQuitLifecycleContext): Promise<boolean> {

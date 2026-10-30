@@ -1,4 +1,5 @@
-import { Button, Card, CardBody } from '@heroui/react'
+import { Button, Card } from '@heroui/react'
+import { Pressable } from 'react-aria'
 import BasePage from '@renderer/components/base/base-page'
 import { useAppConfig } from '@renderer/hooks/use-app-config'
 import { getTestChannelCapacityStatus } from '@renderer/utils/ipc'
@@ -37,64 +38,70 @@ const SpeedTest: React.FC = () => {
   return (
     <BasePage title="测速中心">
       <div className="mx-auto grid w-full max-w-4xl gap-4 p-4 md:grid-cols-2">
-        <Card isPressable onPress={() => navigate('/speed-test/general')} className="bg-content2">
-          <CardBody className="flex min-h-48 flex-col justify-between gap-6 p-5">
-            <div>
-              <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary">
-                <MdDownload className="text-2xl" />
+        <Pressable onPress={() => navigate('/speed-test/general')}>
+          <Card className="bg-content2" data-pressable="true" role="button" tabIndex={0}>
+            <Card.Content className="flex min-h-48 flex-col justify-between gap-6 p-5">
+              <div>
+                <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+                  <MdDownload className="text-2xl" />
+                </div>
+                <h2 className="text-xl font-semibold">普通测速</h2>
+                <p className="mt-2 text-sm leading-6 text-foreground-500">
+                  在独立页面测试节点延迟和真实下载速度；代理组页面的原有测速入口仍然保留。
+                </p>
               </div>
-              <h2 className="text-xl font-semibold">普通测速</h2>
-              <p className="mt-2 text-sm leading-6 text-foreground-500">
-                在独立页面测试节点延迟和真实下载速度；代理组页面的原有测速入口仍然保留。
-              </p>
-            </div>
-            <div className="flex items-center gap-1 self-start rounded-xl bg-primary/15 px-3 py-2 text-sm font-medium text-primary">
-              开始普通测速
-              <MdOutlineArrowForward />
-            </div>
-          </CardBody>
-        </Card>
+              <div className="flex items-center gap-1 self-start rounded-xl bg-primary/15 px-3 py-2 text-sm font-medium text-primary">
+                开始普通测速
+                <MdOutlineArrowForward />
+              </div>
+            </Card.Content>
+          </Card>
+        </Pressable>
 
-        <Card isPressable onPress={() => navigate('/speed-test/codex')} className="bg-content2">
-          <CardBody className="flex min-h-48 flex-col justify-between gap-6 p-5">
-            <div>
-              <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-secondary/15 text-secondary">
-                <MdSpeed className="text-2xl" />
+        <Pressable onPress={() => navigate('/speed-test/codex')}>
+          <Card className="bg-content2" data-pressable="true" role="button" tabIndex={0}>
+            <Card.Content className="flex min-h-48 flex-col justify-between gap-6 p-5">
+              <div>
+                <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-secondary/15 text-secondary">
+                  <MdSpeed className="text-2xl" />
+                </div>
+                <h2 className="text-xl font-semibold">Codex 测试</h2>
+                <p className="mt-2 text-sm leading-6 text-foreground-500">
+                  支持 TLS、HTTPS、WebSocket 链路测试，并可使用已登录的 Codex
+                  执行真实响应测试，比较首字和完整返回速度。
+                </p>
               </div>
-              <h2 className="text-xl font-semibold">Codex 测试</h2>
-              <p className="mt-2 text-sm leading-6 text-foreground-500">
-                支持 TLS、HTTPS、WebSocket 链路测试，并可使用已登录的 Codex
-                执行真实响应测试，比较首字和完整返回速度。
-              </p>
-            </div>
-            <div className="flex items-center gap-1 self-start rounded-xl bg-secondary/15 px-3 py-2 text-sm font-medium text-secondary">
-              开始专项测试
-              <MdOutlineArrowForward />
-            </div>
-          </CardBody>
-        </Card>
+              <div className="flex items-center gap-1 self-start rounded-xl bg-secondary/15 px-3 py-2 text-sm font-medium text-secondary">
+                开始专项测试
+                <MdOutlineArrowForward />
+              </div>
+            </Card.Content>
+          </Card>
+        </Pressable>
 
-        <Card isPressable onPress={() => navigate('/speed-test/process')} className="bg-content2">
-          <CardBody className="flex min-h-48 flex-col justify-between gap-6 p-5">
-            <div>
-              <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-success/15 text-success">
-                <MdLan className="text-2xl" />
+        <Pressable onPress={() => navigate('/speed-test/process')}>
+          <Card className="bg-content2" data-pressable="true" role="button" tabIndex={0}>
+            <Card.Content className="flex min-h-48 flex-col justify-between gap-6 p-5">
+              <div>
+                <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-success/15 text-success">
+                  <MdLan className="text-2xl" />
+                </div>
+                <h2 className="text-xl font-semibold">进程测速</h2>
+                <p className="mt-2 text-sm leading-6 text-foreground-500">
+                  根据连接监控记录的真实域名，批量比较各节点连接指定进程目标的速度和成功率。
+                </p>
               </div>
-              <h2 className="text-xl font-semibold">进程测速</h2>
-              <p className="mt-2 text-sm leading-6 text-foreground-500">
-                根据连接监控记录的真实域名，批量比较各节点连接指定进程目标的速度和成功率。
-              </p>
-            </div>
-            <div className="flex items-center gap-1 self-start rounded-xl bg-success/15 px-3 py-2 text-sm font-medium text-success">
-              选择进程测速
-              <MdOutlineArrowForward />
-            </div>
-          </CardBody>
-        </Card>
+              <div className="flex items-center gap-1 self-start rounded-xl bg-success/15 px-3 py-2 text-sm font-medium text-success">
+                选择进程测速
+                <MdOutlineArrowForward />
+              </div>
+            </Card.Content>
+          </Card>
+        </Pressable>
 
         {capacity && (
           <Card className="bg-content2 md:col-span-2">
-            <CardBody className="flex flex-row flex-wrap items-center justify-between gap-4 p-4">
+            <Card.Content className="flex flex-row flex-wrap items-center justify-between gap-4 p-4">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-default-200 text-foreground-600">
                   <MdMemory className="text-xl" />
@@ -109,13 +116,13 @@ const SpeedTest: React.FC = () => {
               </div>
               <Button
                 size="sm"
-                variant="flat"
+                variant="secondary"
                 isDisabled={capacity.configured === capacity.default}
                 onPress={() => void resetCapacity()}
               >
                 恢复默认 {capacity.default}
               </Button>
-            </CardBody>
+            </Card.Content>
           </Card>
         )}
       </div>

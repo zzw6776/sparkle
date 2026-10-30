@@ -1,4 +1,4 @@
-import { Drawer, Input, InputGroup, ListBox, Select, Switch } from '@heroui-v3/react'
+import { Drawer, Input, InputGroup, ListBox, Select, Switch } from '@heroui/react'
 import React, { useState, useEffect, useRef } from 'react'
 import SettingItem from '../base/base-setting-item'
 import { SettingTabs, settingItemProps } from '../base/base-controls'
@@ -109,12 +109,12 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
       variant="blur"
       className="top-12 h-[calc(100%-48px)]"
     >
-      <Drawer.Content placement="right" className="top-12 h-[calc(100%-48px)] p-3 pl-0">
-        <Drawer.Dialog className="flex h-full w-[min(520px,calc(100vw-32px))] max-w-none flex-col overflow-hidden rounded-2xl! border border-separator/70 bg-overlay p-0 shadow-overlay flag-emoji">
-          <Drawer.Header className="border-b border-separator/70 px-5 py-4">
+      <Drawer.Content placement="right" className="top-12 h-[calc(100%-48px)] p-2 pl-0">
+        <Drawer.Dialog className="flex h-full w-[min(520px,calc(100vw-32px))] max-w-none flex-col overflow-hidden rounded-xl! border border-default-200/70 bg-surface p-0 shadow-lg flag-emoji">
+          <Drawer.Header className="border-b border-default-200/70 px-4 py-3">
             <Drawer.Heading className="text-base font-semibold">代理组设置</Drawer.Heading>
           </Drawer.Header>
-          <Drawer.Body className="no-scrollbar flex-1 overflow-y-auto px-5 py-3">
+          <Drawer.Body className="no-scrollbar flex-1 overflow-y-auto px-4 py-2">
             <div className="flex flex-col gap-1">
               <SettingItem title="代理节点展示列数" {...settingItemProps} divider>
                 <Select
@@ -134,7 +134,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
                     <Select.Value />
                     <Select.Indicator />
                   </Select.Trigger>
-                  <Select.Popover>
+                  <Select.Popover placement="bottom" shouldFlip containerPadding={56}>
                     <ListBox>
                       <ListBox.Item id="auto" textValue="自动">
                         自动
@@ -211,6 +211,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
               </SettingItem>
               <SettingItem title="显示二级分组选中节点" {...settingItemProps} divider>
                 <Switch
+                  size="sm"
                   aria-label="显示二级分组选中节点"
                   isSelected={showGroupSelectedProxy}
                   onChange={(v) => {
@@ -226,6 +227,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
               </SettingItem>
               <SettingItem title="悬停显示节点详情" {...settingItemProps} divider>
                 <Switch
+                  size="sm"
                   aria-label="悬停显示节点详情"
                   isSelected={showProxyDetailTooltip}
                   onChange={(v) => {
@@ -241,6 +243,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
               </SettingItem>
               <SettingItem title="记住代理组展开状态" {...settingItemProps} divider>
                 <Switch
+                  size="sm"
                   aria-label="记住代理组展开状态"
                   isSelected={rememberProxyGroupOpenState}
                   onChange={(v) => {
@@ -256,6 +259,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
               </SettingItem>
               <SettingItem title="切换节点时断开连接" {...settingItemProps} divider>
                 <Switch
+                  size="sm"
                   aria-label="切换节点时断开连接"
                   isSelected={autoCloseConnection}
                   onChange={(v) => {
@@ -407,6 +411,7 @@ const ProxySettingDrawer: React.FC<Props> = (props) => {
               </SettingItem>
               <SettingItem title="使用策略组 API 测速" {...settingItemProps} divider>
                 <Switch
+                  size="sm"
                   aria-label="使用策略组 API 测速"
                   isSelected={delayTestUseGroupApi}
                   onChange={(v) => {

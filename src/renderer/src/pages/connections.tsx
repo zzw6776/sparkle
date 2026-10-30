@@ -170,10 +170,26 @@ const Connections: React.FC = () => {
       filtered = connections.filter((connection) => compiledFilter.matches(connection))
     }
 
-    if (connectionOrderBy) {
-      const dir = connectionDirection === 'asc' ? 1 : -1
+    const groupedMemberOrderBy =
+      connectionGroupSort === 'upload' ||
+      connectionGroupSort === 'download' ||
+      connectionGroupSort === 'uploadSpeed' ||
+      connectionGroupSort === 'downloadSpeed'
+        ? connectionGroupSort
+        : undefined
+    const effectiveOrderBy =
+      connectionGroupByProcess && groupedMemberOrderBy
+        ? groupedMemberOrderBy
+        : connectionOrderBy
+    const effectiveDirection =
+      connectionGroupByProcess && groupedMemberOrderBy
+        ? connectionGroupDirection
+        : connectionDirection
+
+    if (effectiveOrderBy) {
+      const dir = effectiveDirection === 'asc' ? 1 : -1
       let comparator: (a: ControllerConnectionDetail, b: ControllerConnectionDetail) => number
-      switch (connectionOrderBy) {
+      switch (effectiveOrderBy) {
         case 'time':
           comparator = (a, b) => (Date.parse(b.start) - Date.parse(a.start)) * dir
           break
@@ -214,6 +230,9 @@ const Connections: React.FC = () => {
     filter,
     compiledFilter,
     deviceNames,
+    connectionGroupByProcess,
+    connectionGroupSort,
+    connectionGroupDirection,
     connectionDirection,
     connectionOrderBy,
     tab
@@ -886,7 +905,13 @@ const Connections: React.FC = () => {
   )
 
   const renderGroupMember = useCallback(
-    (i: number, _groupIndex: number, connection: ControllerConnectionDetail) => {
+    (
+      i: number,
+      _groupIndex: number,
+      _data: unknown,
+      members: ControllerConnectionDetail[]
+    ) => {
+      const connection = members[i]
       if (!connection) return <div style={{ minHeight: 80 }} />
       const path = connection.metadata.processPath || ''
       const displayName =
@@ -1262,7 +1287,7 @@ const Connections: React.FC = () => {
             <GroupedVirtuoso
               key="connections-grouped"
               groupCounts={groupCounts}
-              data={flatMembers}
+              context={flatMembers}
               groupContent={renderGroupHeader}
               itemContent={renderGroupMember}
               defaultItemHeight={80}

@@ -34,7 +34,7 @@ const ConnectionSettingDrawer: React.FC<Props> = (props) => {
     connectionGroupSort = 'name',
     connectionGroupDirection = 'asc'
   } = appConfig || {}
-  const [intervalInput, setIntervalInput] = useState(connectionInterval)
+  const [intervalInput, setIntervalInput] = useState(() => connectionInterval.toString())
   const [isOpen, setIsOpen] = useState(true)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -53,6 +53,15 @@ const ConnectionSettingDrawer: React.FC<Props> = (props) => {
     }
     setIsOpen(true)
   }, [reopenSignal])
+
+  useEffect(() => {
+    setIntervalInput(connectionInterval.toString())
+  }, [connectionInterval])
+
+  const parsedInterval = Number(intervalInput)
+  const isIntervalValid =
+    Number.isInteger(parsedInterval) && parsedInterval >= 100 && parsedInterval <= 10000
+  const isIntervalChanged = intervalInput !== connectionInterval.toString()
 
   const closeWithAnimation = (): void => {
     if (closeTimer.current) return
@@ -207,14 +216,15 @@ const ConnectionSettingDrawer: React.FC<Props> = (props) => {
               )}
               <SettingItem title="刷新间隔" {...settingItemProps}>
                 <div className="setting-item__inline-controls">
-                  {intervalInput !== connectionInterval && (
+                  {isIntervalChanged && (
                     <Button
                       size="sm"
                       variant="primary"
+                      isDisabled={!isIntervalValid}
                       onPress={() => {
-                        const actualValue = Math.min(10000, Math.max(100, intervalInput))
-                        setIntervalInput(actualValue)
-                        patchAppConfig({ connectionInterval: actualValue })
+                        if (!isIntervalValid) return
+                        setIntervalInput(parsedInterval.toString())
+                        patchAppConfig({ connectionInterval: parsedInterval })
                         restartMihomoConnections()
                       }}
                     >
@@ -225,11 +235,12 @@ const ConnectionSettingDrawer: React.FC<Props> = (props) => {
                     <InputGroup.Input
                       aria-label="刷新间隔"
                       type="number"
-                      value={intervalInput.toString()}
+                      value={intervalInput}
                       max={10000}
                       min={100}
+                      step={100}
                       onChange={(event) => {
-                        setIntervalInput(parseInt(event.target.value) || 100)
+                        setIntervalInput(event.target.value)
                       }}
                     />
                     <InputGroup.Suffix>ms</InputGroup.Suffix>

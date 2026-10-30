@@ -52,9 +52,10 @@ let trafficRenderSequence = 0
 type TrayImage = Electron.NativeImage | string
 const customTrayIconSize = 16
 const customTrayIconScaleFactors = [1, 1.25, 1.5, 2, 2.5, 3]
-const trafficIconWidth = 114
+const trafficIconWidth = 120
 const trafficIconHeight = 36
 const trafficHorizontalPadding = 2
+const trafficArrowX = 0
 const sfProTextPath = '/System/Library/Fonts/SFNS.ttf'
 
 function formatDelayText(delay: number): string {
@@ -163,8 +164,8 @@ async function renderTrafficTrayIcon(upload: number, download: number): Promise<
   context.font = `700 18px "${trafficFontFamily}"`
   context.textBaseline = 'alphabetic'
   context.textAlign = 'left'
-  context.fillText('↑', trafficHorizontalPadding, 15)
-  context.fillText('↓', trafficHorizontalPadding, 34)
+  context.fillText('↑', trafficArrowX, 15)
+  context.fillText('↓', trafficArrowX, 34)
   context.textAlign = 'right'
   const textRight = trafficIconWidth - trafficHorizontalPadding
   context.fillText(uploadText, textRight, 15)

@@ -183,6 +183,7 @@ export function LegacyInput({
 
 interface LegacySelectItemProps {
   children: ReactNode
+  value: string
 }
 
 export function LegacySelectItem(_props: LegacySelectItemProps): null {
@@ -211,7 +212,7 @@ export function LegacySelect({
   const entries = Children.toArray(children)
     .filter(isValidElement<LegacySelectItemProps>)
     .map((child: ReactElement<LegacySelectItemProps>) => ({
-      key: String(child.key),
+      key: child.props.value,
       label: child.props.children
     }))
   return (

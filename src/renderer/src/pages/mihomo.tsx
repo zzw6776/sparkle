@@ -172,7 +172,7 @@ const Mihomo: React.FC = () => {
           onRunModeChange={(mode) => handleConfigChangeWithRestart('serviceRunMode', mode)}
           serviceCpuAffinity={serviceCpuAffinity}
           onCpuAffinityChange={async (value) => {
-            await patchAppConfig({ serviceCpuAffinity: value })
+            return Boolean(await patchAppConfig({ serviceCpuAffinity: value }))
           }}
           onInit={async () => {
             await initService()

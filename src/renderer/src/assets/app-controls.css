@@ -465,6 +465,7 @@
   }
   .switch .switch__thumb {
     position: relative;
+    inset-inline-start: 0;
     width: var(--app-switch-thumb);
     height: var(--app-switch-thumb);
     margin: 0;
@@ -475,6 +476,7 @@
     transition: transform 200ms;
   }
   .switch:is([data-selected='true'], [aria-checked='true']) .switch__control .switch__thumb {
+    inset-inline-start: 0;
     margin: 0;
     transform: translateX(calc(var(--app-switch-width) - var(--app-switch-thumb) - 0.5rem));
   }

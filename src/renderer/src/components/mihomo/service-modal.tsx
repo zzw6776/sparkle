@@ -1,6 +1,6 @@
 import { Chip, Spinner, Button, Modal, Tabs } from '@heroui/react'
 
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 
 import { serviceStatus, testServiceConnection } from '@renderer/utils/ipc'
 import { platform } from '@renderer/utils/init'
@@ -11,7 +11,7 @@ interface Props {
   serviceRunMode: NonNullable<AppConfig['serviceRunMode']>
   onRunModeChange: (mode: NonNullable<AppConfig['serviceRunMode']>) => Promise<void>
   serviceCpuAffinity: number[]
-  onCpuAffinityChange: (cpus: number[]) => Promise<void>
+  onCpuAffinityChange: (cpus: number[]) => Promise<boolean>
   onInit: () => Promise<void>
   onInstall: () => Promise<void>
   onUninstall: () => Promise<void>
@@ -41,6 +41,10 @@ async function readServiceStatus(): Promise<ServiceStatusType> {
   }
 }
 
+function isSameCpuAffinity(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((cpu, index) => cpu === right[index])
+}
+
 const ServiceModal: React.FC<Props> = (props) => {
   const {
     onChange,
@@ -55,6 +59,10 @@ const ServiceModal: React.FC<Props> = (props) => {
     onRestart
   } = props
   const [loading, setLoading] = useState(false)
+  const [cpuAffinityDraft, setCpuAffinityDraft] = useState(serviceCpuAffinity)
+  const cpuAffinityDraftRef = useRef(serviceCpuAffinity)
+  const savedCpuAffinityRef = useRef(serviceCpuAffinity)
+  const cpuAffinitySavingRef = useRef(false)
   const [status, setStatus] = useState<ServiceStatusType | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatusType>('checking')
   const cpuCount = Math.max(1, navigator.hardwareConcurrency || 1)
@@ -63,11 +71,42 @@ const ServiceModal: React.FC<Props> = (props) => {
     cpuList.slice(row * 12, row * 12 + 12)
   )
 
+  useEffect(() => {
+    savedCpuAffinityRef.current = serviceCpuAffinity
+    if (!cpuAffinitySavingRef.current) {
+      cpuAffinityDraftRef.current = serviceCpuAffinity
+      setCpuAffinityDraft(serviceCpuAffinity)
+    }
+  }, [serviceCpuAffinity])
+
+  const persistCpuAffinity = async (): Promise<void> => {
+    if (cpuAffinitySavingRef.current) return
+    cpuAffinitySavingRef.current = true
+    try {
+      while (true) {
+        const next = cpuAffinityDraftRef.current
+        const saved = await onCpuAffinityChange(next)
+        if (!saved) {
+          cpuAffinityDraftRef.current = savedCpuAffinityRef.current
+          setCpuAffinityDraft(savedCpuAffinityRef.current)
+          return
+        }
+        savedCpuAffinityRef.current = next
+        if (isSameCpuAffinity(next, cpuAffinityDraftRef.current)) return
+      }
+    } finally {
+      cpuAffinitySavingRef.current = false
+    }
+  }
+
   const toggleCpu = (cpu: number): void => {
-    const next = serviceCpuAffinity.includes(cpu)
-      ? serviceCpuAffinity.filter((item) => item !== cpu)
-      : [...serviceCpuAffinity, cpu].sort((a, b) => a - b)
-    void onCpuAffinityChange(next)
+    const current = cpuAffinityDraftRef.current
+    const next = current.includes(cpu)
+      ? current.filter((item) => item !== cpu)
+      : [...current, cpu].sort((a, b) => a - b)
+    cpuAffinityDraftRef.current = next
+    setCpuAffinityDraft(next)
+    void persistCpuAffinity()
   }
 
   const refreshServiceStatus = useCallback(async (nextStatus?: ServiceStatusType) => {
@@ -217,7 +256,7 @@ const ServiceModal: React.FC<Props> = (props) => {
                         className={`flex gap-0.5 ${cpuRows.length === 1 ? 'justify-end' : 'justify-start'}`}
                       >
                         {row.map((cpu) => {
-                          const selected = serviceCpuAffinity.includes(cpu)
+                          const selected = cpuAffinityDraft.includes(cpu)
                           return (
                             <button
                               key={cpu}

@@ -713,8 +713,12 @@ const GeneralSpeedTest: React.FC = () => {
                     }
                   }}
                 >
-                  <SelectItem key="group">使用组配置</SelectItem>
-                  <SelectItem key="global">使用统一地址</SelectItem>
+                  <SelectItem key="group" value="group">
+                    使用组配置
+                  </SelectItem>
+                  <SelectItem key="global" value="global">
+                    使用统一地址
+                  </SelectItem>
                 </Select>
                 <Input
                   key={`delay-url-${delayTestUrl}`}
@@ -785,9 +789,15 @@ const GeneralSpeedTest: React.FC = () => {
                     }
                   }}
                 >
-                  <SelectItem key="cloudflare">Cloudflare</SelectItem>
-                  <SelectItem key="telegram">Telegram</SelectItem>
-                  <SelectItem key="custom">自定义地址</SelectItem>
+                  <SelectItem key="cloudflare" value="cloudflare">
+                    Cloudflare
+                  </SelectItem>
+                  <SelectItem key="telegram" value="telegram">
+                    Telegram
+                  </SelectItem>
+                  <SelectItem key="custom" value="custom">
+                    自定义地址
+                  </SelectItem>
                 </Select>
                 {speedTestSource === 'custom' && (
                   <Input

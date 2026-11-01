@@ -508,7 +508,7 @@ export const mihomoUpgrade = async (channel: string): Promise<void> => {
   if (process.platform === 'win32') await patchMihomoConfig({ 'log-level': 'info' })
   const instance = await getAxios()
   return await instance.post(`/upgrade?channel=${encodeURIComponent(channel)}`, undefined, {
-    timeout: 90000
+    timeout: 180000
   })
 }
 

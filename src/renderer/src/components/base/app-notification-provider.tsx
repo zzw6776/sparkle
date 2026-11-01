@@ -38,9 +38,9 @@ const AppNotificationProvider: React.FC = () => {
   return (
     <>
       <Toast.Provider
-        className="app-nodrag top-14 right-4"
+        className="app-nodrag top-14"
         maxVisibleToasts={maxVisibleAppNotifications}
-        placement="top end"
+        placement="top"
       />
       <ErrorDetailDrawer
         title={errorDetail?.title ?? ''}

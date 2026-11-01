@@ -13,6 +13,7 @@ import { IoMdCloudDownload } from 'react-icons/io'
 import PubSub from 'pubsub-js'
 import {
   manualGrantCorePermition,
+  mihomoVersion,
   mihomoUpgrade,
   restartCore,
   revokeCorePermission,
@@ -34,6 +35,41 @@ import { systemCoreOnlyBuild } from '../../../shared/build-flags'
 
 let systemCorePathsCache: string[] | null = null
 let cachePromise: Promise<string[]> | null = null
+const coreVersionConfirmTimeout = 30000
+const coreVersionRetryInterval = 500
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+function formatUpgradeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const source = error as { message?: unknown; error?: unknown }
+    if (typeof source.message === 'string') return source.message
+    if (typeof source.error === 'string') return source.error
+  }
+  return String(error)
+}
+
+async function waitForUpdatedCoreVersion(previousVersion: string): Promise<string | null> {
+  const deadline = Date.now() + coreVersionConfirmTimeout
+
+  while (Date.now() < deadline) {
+    try {
+      const { version } = await mihomoVersion()
+      if (!previousVersion || version !== previousVersion) return version
+    } catch {
+      // The controller is temporarily unavailable while mihomo replaces and restarts itself.
+    }
+    await delay(coreVersionRetryInterval)
+  }
+
+  return null
+}
 
 const getSystemCorePaths = async (): Promise<string[]> => {
   if (systemCorePathsCache !== null) return systemCorePathsCache
@@ -69,6 +105,7 @@ const Mihomo: React.FC = () => {
   const { ipv6 } = controledMihomoConfig || {}
 
   const [upgrading, setUpgrading] = useState(false)
+  const [upgradeStatus, setUpgradeStatus] = useState<string | null>(null)
   const [showPermissionModal, setShowPermissionModal] = useState(false)
   const [showServiceModal, setShowServiceModal] = useState(false)
   const [systemCorePaths, setSystemCorePaths] = useState<string[]>(systemCorePathsCache || [])
@@ -99,18 +136,46 @@ const Mihomo: React.FC = () => {
   }
 
   const handleCoreUpgrade = async (): Promise<void> => {
+    let previousVersion = ''
     try {
       setUpgrading(true)
+      setUpgradeStatus('正在检查并下载…')
+      previousVersion = (await mihomoVersion()).version
       await mihomoUpgrade(core === 'mihomo' ? 'release' : 'alpha')
-      setTimeout(() => PubSub.publish('mihomo-core-changed'), 2000)
-    } catch (e) {
-      if (typeof e === 'string' && e.includes('already using latest version')) {
-        notify('已经是最新版本')
+      setUpgradeStatus('正在重启并确认版本…')
+      const updatedVersion = await waitForUpdatedCoreVersion(previousVersion)
+      PubSub.publish('mihomo-core-changed')
+
+      if (updatedVersion) {
+        notify('内核更新完成', {
+          body: `${previousVersion} → ${updatedVersion}`,
+          variant: 'success',
+          forceToast: true
+        })
       } else {
-        notify(e, { variant: 'danger' })
+        notify('内核已完成替换', {
+          body: '暂时无法确认重启后的版本，请稍后查看内核版本卡片',
+          variant: 'warning',
+          forceToast: true
+        })
+      }
+    } catch (e) {
+      const message = formatUpgradeError(e)
+      if (message.toLowerCase().includes('already using latest version')) {
+        notify('已经是最新版本', {
+          body: previousVersion || undefined,
+          forceToast: true
+        })
+      } else {
+        notify('内核更新失败', {
+          body: message,
+          variant: 'danger',
+          forceToast: true
+        })
       }
     } finally {
       setUpgrading(false)
+      setUpgradeStatus(null)
     }
   }
 
@@ -203,21 +268,33 @@ const Mihomo: React.FC = () => {
             title="内核版本"
             actions={
               core === 'mihomo' || core === 'mihomo-alpha' ? (
-                <Button
-                  size="sm"
-                  isIconOnly
-                  onPress={handleCoreUpgrade}
-                  variant="ghost"
-                  data-color="default"
-                  isPending={upgrading}
-                  isDisabled={upgrading}
-                >
-                  {upgrading ? (
-                    <Spinner size="sm" color="current" />
-                  ) : (
-                    <IoMdCloudDownload className="text-lg" />
+                <div className="flex items-center gap-2">
+                  {upgradeStatus && (
+                    <span
+                      className="text-xs text-muted whitespace-nowrap"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {upgradeStatus}
+                    </span>
                   )}
-                </Button>
+                  <Button
+                    size="sm"
+                    isIconOnly
+                    aria-label="检查并更新内核"
+                    onPress={handleCoreUpgrade}
+                    variant="ghost"
+                    data-color="default"
+                    isPending={upgrading}
+                    isDisabled={upgrading}
+                  >
+                    {upgrading ? (
+                      <Spinner size="sm" color="current" />
+                    ) : (
+                      <IoMdCloudDownload className="text-lg" />
+                    )}
+                  </Button>
+                </div>
               ) : null
             }
             divider
